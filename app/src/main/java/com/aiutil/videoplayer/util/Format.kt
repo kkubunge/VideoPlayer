@@ -36,7 +36,7 @@ object Format {
 
     fun speed(speed: Float): String {
         val clamped = speed.coerceIn(GestureMath.MIN_SPEED, GestureMath.MAX_SPEED)
-        return String.format(Locale.US, "x%.2f", clamped)
+        return String.format(Locale.US, "x%.1f", clamped)
     }
 
     fun resolution(width: Int, height: Int): String {

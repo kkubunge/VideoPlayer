@@ -64,14 +64,15 @@ class GestureMathTest {
         )
         assertEquals(0.5f, cappedMin, 0.001f)
 
-        // 0.05 단위로 스냅되어야 한다.
+        // 0.5 단위로 스냅되어야 한다.
         val snapped = GestureMath.computeLongPressDragSpeed(
             startSpeed = 1.0f,
-            deltaX = 37f,
-            viewWidth = 1080f,
+            deltaX = 80f,
+            viewWidth = 1000f,
         )
-        val remainder = ((snapped * 100f).toInt()) % 5
+        val remainder = kotlin.math.round(snapped * 10f).toInt() % 5
         assertEquals(0, remainder)
+        assertEquals(1.5f, snapped, 0.001f)
     }
 
     @Test

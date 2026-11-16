@@ -685,7 +685,7 @@ fun PlayerScreen(
                                         hudState = HudOverlayState(
                                             icon = Icons.Default.Speed,
                                             title = Format.speed(latestPlaybackSpeed),
-                                            subtitle = "좌/우 드래그 (x0.50 ~ x6.00)",
+                                            subtitle = "좌/우 드래그 (x0.5 ~ x6.0)",
                                             progress = (latestPlaybackSpeed - GestureMath.MIN_SPEED) /
                                                 (GestureMath.MAX_SPEED - GestureMath.MIN_SPEED),
                                         )
@@ -798,7 +798,7 @@ fun PlayerScreen(
                                             hudState = HudOverlayState(
                                                 icon = Icons.Default.Speed,
                                                 title = Format.speed(newSpeed),
-                                                subtitle = "x0.50 ◄────────► x6.00",
+                                                subtitle = "x0.5 ~ x6.0",
                                                 progress = (newSpeed - GestureMath.MIN_SPEED) /
                                                     (GestureMath.MAX_SPEED - GestureMath.MIN_SPEED),
                                             )
@@ -1550,7 +1550,7 @@ fun PlayerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("재생 속도 (${Format.speed(playbackSpeed)})", style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = { applySpeed(1.0f) }) { Text("x1.00 초기화") }
+                    TextButton(onClick = { applySpeed(1.0f) }) { Text("x1.0 초기화") }
                 }
                 Slider(
                     value = playbackSpeed,
@@ -1559,14 +1559,15 @@ fun PlayerScreen(
                         applySpeed(snapped)
                     },
                     valueRange = GestureMath.MIN_SPEED..GestureMath.MAX_SPEED,
+                    steps = 10,
                 )
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f).forEach { preset ->
+                    listOf(0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 6.0f).forEach { preset ->
                         FilterChip(
-                            selected = abs(playbackSpeed - preset) < 0.03f,
+                            selected = abs(playbackSpeed - preset) < 0.05f,
                             onClick = { applySpeed(preset) },
                             label = { Text(Format.speed(preset)) },
                         )

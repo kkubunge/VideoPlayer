@@ -12,9 +12,9 @@ object GestureMath {
     const val MIN_BRIGHTNESS = 0.01f
     const val MAX_BRIGHTNESS = 1.0f
 
-    const val MIN_SPEED = 0.50f
-    const val MAX_SPEED = 6.00f
-    const val SPEED_STEP = 0.05f
+    const val MIN_SPEED = 0.5f
+    const val MAX_SPEED = 6.0f
+    const val SPEED_STEP = 0.5f
 
     /** 왼쪽 영역 상/하 드래그 밝기 계산 (deltaY < 0 이면 위로 드래그 -> 증가). */
     fun computeBrightness(startBrightness: Float, deltaY: Float, viewHeight: Float): Float {
@@ -33,8 +33,8 @@ object GestureMath {
     }
 
     /**
-     * 길게 터치 후 좌/우 드래그 시 배속(x0.50 ~ x6.00) 미세 조절 계산.
-     * 오른쪽 드래그(+)는 가속, 왼쪽 드래그(-)는 감속하며 0.05x 단위로 스냅된다.
+     * 길게 터치 후 좌/우 드래그 시 배속(x0.5 ~ x6.0) 조절 계산.
+     * 오른쪽 드래그(+)는 가속, 왼쪽 드래그(-)는 감속하며 0.5x 단위로 스냅된다.
      */
     fun computeLongPressDragSpeed(startSpeed: Float, deltaX: Float, viewWidth: Float): Float {
         val safeWidth = viewWidth.coerceAtLeast(100f)
@@ -43,7 +43,7 @@ object GestureMath {
         val deltaSpeed = (deltaX / (safeWidth * 0.75f)) * range
         val raw = (startSpeed + deltaSpeed).coerceIn(MIN_SPEED, MAX_SPEED)
         val stepped = (raw / SPEED_STEP).roundToInt() * SPEED_STEP
-        return (stepped * 100f).roundToInt() / 100f
+        return (stepped * 10f).roundToInt() / 10f
     }
 
     /** 일반 좌/우 드래그 시 프레임 단위 정밀 탐색 이동 시간(ms) 계산. */
