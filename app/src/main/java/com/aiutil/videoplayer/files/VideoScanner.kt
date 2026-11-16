@@ -154,7 +154,7 @@ object VideoScanner {
         return VideoItem(
             id = file.absolutePath,
             title = file.name,
-            uri = Uri.fromFile(file).toString(),
+            uri = runCatching { Uri.fromFile(file).toString() }.getOrElse { file.toURI().toString() },
             path = file.absolutePath,
             folderPath = file.parent ?: "/",
             folderName = file.parentFile?.name?.takeIf { it.isNotBlank() } ?: "내부 저장소",
