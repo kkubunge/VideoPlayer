@@ -1125,26 +1125,27 @@ fun PlayerScreen(
                         )
                     }
                 }
-            } else if (settings.aiTranslateEnabled &&
-                subtitleStatus.isNotBlank() &&
-                loadedSubName == null &&
-                !isInPipMode
+            }
+            // 컨트롤 바가 숨겨졌을 때 AI 인식/번역 중 상태만 우측 상단 구석에 작게 표시
+            if (!controlsVisible &&
+                !isInPipMode &&
+                !showTrimSheet &&
+                settings.aiTranslateEnabled &&
+                subtitleStatus.contains("중")
             ) {
                 Surface(
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(
-                            horizontal = 20.dp,
-                            vertical = if (controlsVisible) 88.dp else 22.dp,
-                        ),
-                    color = Color.Black.copy(alpha = 0.45f),
-                    shape = RoundedCornerShape(12.dp),
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(top = 8.dp, end = 10.dp),
+                    color = Color.Black.copy(alpha = 0.32f),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
                     Text(
                         text = subtitleStatus,
-                        color = Color.White.copy(alpha = 0.88f),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        color = Color.White.copy(alpha = 0.78f),
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     )
                 }
             }
@@ -1308,6 +1309,9 @@ fun PlayerScreen(
                             if (settings.aiTranslateEnabled) {
                                 if (isNotEmpty()) append(" · ")
                                 append("AI(${settings.targetLangCode})")
+                                if (subtitleStatus.isNotBlank()) {
+                                    append(" · $subtitleStatus")
+                                }
                             }
                             if (repeatA != null) {
                                 if (isNotEmpty()) append(" · ")
@@ -2272,6 +2276,13 @@ fun PlayerScreen(
                     text = "자막 파일: ${loadedSubName ?: "없음 (내장 자막 또는 AI 음성 인식)"}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (subtitleStatus.isNotBlank()) {
+                    Text(
+                        text = "상태: $subtitleStatus",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { showSubtitleFileDialog = true }) {
                         Icon(Icons.Default.FolderOpen, null, modifier = Modifier.size(16.dp))
