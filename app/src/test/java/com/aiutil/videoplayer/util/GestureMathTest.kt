@@ -120,4 +120,40 @@ class GestureMathTest {
             ),
         )
     }
+
+    @Test
+    fun `two finger pinch and horizontal slide scale video within 50 to 400 percent`() {
+        // 핀치 아웃(간격 넓히기): 200 -> 300 이면 1.5배 (150%)
+        val pinchOut = GestureMath.computeTwoFingerZoom(
+            startZoom = 1.0f,
+            initialSpan = 200f,
+            currentSpan = 300f,
+            initialCenterX = 500f,
+            currentCenterX = 500f,
+            viewWidth = 1000f,
+        )
+        assertEquals(1.50f, pinchOut, 0.001f)
+
+        // 두 손가락 함께 오른쪽으로 이동 (간격 유지): 확대
+        val slideRight = GestureMath.computeTwoFingerZoom(
+            startZoom = 1.0f,
+            initialSpan = 200f,
+            currentSpan = 200f,
+            initialCenterX = 400f,
+            currentCenterX = 700f,
+            viewWidth = 1000f,
+        )
+        assertTrue(slideRight > 1.0f && slideRight <= GestureMath.MAX_ZOOM)
+
+        // 두 손가락 함께 왼쪽으로 이동 (간격 유지): 축소 (최소 50%)
+        val slideLeft = GestureMath.computeTwoFingerZoom(
+            startZoom = 1.0f,
+            initialSpan = 200f,
+            currentSpan = 200f,
+            initialCenterX = 700f,
+            currentCenterX = 100f,
+            viewWidth = 1000f,
+        )
+        assertEquals(GestureMath.MIN_ZOOM, slideLeft, 0.001f)
+    }
 }

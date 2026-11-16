@@ -16,6 +16,10 @@ object GestureMath {
     const val MAX_SPEED = 6.0f
     const val SPEED_STEP = 0.5f
 
+    const val MIN_ZOOM = 0.50f
+    const val MAX_ZOOM = 4.00f
+    const val ZOOM_STEP = 0.05f
+
     /** 왼쪽 영역 상/하 드래그 밝기 계산 (deltaY < 0 이면 위로 드래그 -> 증가). */
     fun computeBrightness(startBrightness: Float, deltaY: Float, viewHeight: Float): Float {
         if (viewHeight <= 1f) return startBrightness.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
@@ -80,5 +84,33 @@ object GestureMath {
     fun framesToMs(frames: Long, fps: Float): Long {
         val effectiveFps = if (fps in 1f..240f) fps else 30f
         return ((frames / effectiveFps.toDouble()) * 1000.0).roundToLong()
+    }
+
+    /**
+     * 두 손가락 멀티터치로 화면 크기(50% ~ 400%)를 조절한다.
+     * - 두 손가락 사이 거리를 벌리거나 오므리는 동작(핀치 줌)
+     * - 두 손가락을 터치한 채 좌/우로 함께 이동하는 동작(우측=확대, 좌측=축소)
+     * 두 가지 방식 모두 지원하며 5%(0.05) 단위로 스냅된다.
+     */
+    fun computeTwoFingerZoom(
+        startZoom: Float,
+        initialSpan: Float,
+        currentSpan: Float,
+        initialCenterX: Float,
+        currentCenterX: Float,
+        viewWidth: Float,
+    ): Float {
+        val spanDelta = currentSpan - initialSpan
+        val centerDeltaX = currentCenterX - initialCenterX
+        val raw = if (initialSpan > 20f && kotlin.math.abs(spanDelta) >= kotlin.math.abs(centerDeltaX) * 0.6f) {
+            startZoom * (currentSpan / initialSpan).coerceIn(0.25f, 4.0f)
+        } else {
+            val safeWidth = viewWidth.coerceAtLeast(100f)
+            val deltaZoom = (centerDeltaX / (safeWidth * 0.55f)) * (MAX_ZOOM - MIN_ZOOM)
+            startZoom + deltaZoom
+        }
+        val clamped = raw.coerceIn(MIN_ZOOM, MAX_ZOOM)
+        val stepped = (clamped / ZOOM_STEP).roundToInt() * ZOOM_STEP
+        return (stepped * 100f).roundToInt() / 100f
     }
 }

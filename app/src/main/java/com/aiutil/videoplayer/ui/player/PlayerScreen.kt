@@ -111,6 +111,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -166,6 +167,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -175,6 +177,7 @@ private enum class ActiveDragMode {
     VOLUME,
     SEEK,
     LONG_PRESS_SPEED,
+    TWO_FINGER_ZOOM,
 }
 
 private data class HudOverlayState(
@@ -242,6 +245,7 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var isLocked by remember { mutableStateOf(false) }
     var scaleMode by remember { mutableStateOf(VideoScaleMode.FIT) }
+    var zoomScale by remember { mutableFloatStateOf(1.0f) }
     var orientationMode by remember { mutableStateOf(ScreenOrientationMode.AUTO) }
     var subtitlesVisible by remember { mutableStateOf(true) }
 
@@ -606,11 +610,13 @@ fun PlayerScreen(
     val latestPlaybackSpeed by rememberUpdatedState(playbackSpeed)
     val latestDurationMs by rememberUpdatedState(durationMs)
     val latestVideoFps by rememberUpdatedState(videoFps)
+    val latestZoomScale by rememberUpdatedState(zoomScale)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .clipToBounds()
             .onSizeChanged { containerSize = it },
     ) {
         // 1. 동영상 비디오 서피스 (PlayerView)
@@ -638,6 +644,8 @@ fun PlayerScreen(
                         VideoScaleMode.RATIO_16_9,
                         VideoScaleMode.RATIO_4_3 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     }
+                    pv.scaleX = zoomScale
+                    pv.scaleY = zoomScale
                 },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -703,6 +711,10 @@ fun PlayerScreen(
                                 var pendingSeekTarget = startSeekPos
                                 var gestureEndedCleanly = false
 
+                                var zoomStartScale = latestZoomScale
+                                var twoFingerInitSpan = 0f
+                                var twoFingerInitCenterX = 0f
+
                                 val longPressDeadline = downTime + viewConfig.longPressTimeoutMillis
 
                                 while (true) {
@@ -729,12 +741,64 @@ fun PlayerScreen(
                                         continue
                                     }
 
-                                    val change = event.changes.firstOrNull { it.id == downChange.id }
-                                        ?: event.changes.firstOrNull()
-                                    if (change == null || !change.pressed) {
+                                    val pressedChanges = event.changes.filter { it.pressed }
+                                    if (pressedChanges.isEmpty()) {
                                         gestureEndedCleanly = true
                                         break
                                     }
+
+                                    // 두 손가락 터치 감지 시 즉시 화면 크기 조절 모드로 전환
+                                    if (pressedChanges.size >= 2) {
+                                        val p0 = pressedChanges[0].position
+                                        val p1 = pressedChanges[1].position
+                                        val span = hypot(p0.x - p1.x, p0.y - p1.y)
+                                        val centerX = (p0.x + p1.x) * 0.5f
+
+                                        if (mode != ActiveDragMode.TWO_FINGER_ZOOM) {
+                                            lastSingleTapJobPending = false
+                                            mode = ActiveDragMode.TWO_FINGER_ZOOM
+                                            zoomStartScale = latestZoomScale
+                                            twoFingerInitSpan = span
+                                            twoFingerInitCenterX = centerX
+                                            val pct = (zoomStartScale * 100f).roundToInt()
+                                            hudState = HudOverlayState(
+                                                icon = Icons.Default.AspectRatio,
+                                                title = "화면 크기 $pct%",
+                                                subtitle = "좌우 드래그/핀치 (50%~400%)",
+                                                progress = (zoomStartScale - GestureMath.MIN_ZOOM) /
+                                                    (GestureMath.MAX_ZOOM - GestureMath.MIN_ZOOM),
+                                            )
+                                        } else {
+                                            val newZoom = GestureMath.computeTwoFingerZoom(
+                                                startZoom = zoomStartScale,
+                                                initialSpan = twoFingerInitSpan,
+                                                currentSpan = span,
+                                                initialCenterX = twoFingerInitCenterX,
+                                                currentCenterX = centerX,
+                                                viewWidth = width,
+                                            )
+                                            zoomScale = newZoom
+                                            val pct = (newZoom * 100f).roundToInt()
+                                            hudState = HudOverlayState(
+                                                icon = Icons.Default.AspectRatio,
+                                                title = "화면 크기 $pct%",
+                                                subtitle = "50% ~ 400%",
+                                                progress = (newZoom - GestureMath.MIN_ZOOM) /
+                                                    (GestureMath.MAX_ZOOM - GestureMath.MIN_ZOOM),
+                                            )
+                                        }
+                                        pressedChanges.forEach { it.consume() }
+                                        continue
+                                    }
+
+                                    if (mode == ActiveDragMode.TWO_FINGER_ZOOM) {
+                                        // 한 손가락만 남았을 때는 나머지 손가락이 떨어질 때까지 다른 제스처로 튀지 않게 대기
+                                        pressedChanges.forEach { it.consume() }
+                                        continue
+                                    }
+
+                                    val change = pressedChanges.firstOrNull { it.id == downChange.id }
+                                        ?: pressedChanges.first()
 
                                     val curX = change.position.x
                                     val curY = change.position.y
@@ -842,7 +906,8 @@ fun PlayerScreen(
                                             change.consume()
                                         }
 
-                                        ActiveDragMode.NONE -> Unit
+                                        ActiveDragMode.NONE,
+                                        ActiveDragMode.TWO_FINGER_ZOOM -> Unit
                                     }
                                 }
 
@@ -855,7 +920,8 @@ fun PlayerScreen(
                                     }
 
                                     ActiveDragMode.BRIGHTNESS,
-                                    ActiveDragMode.VOLUME -> {
+                                    ActiveDragMode.VOLUME,
+                                    ActiveDragMode.TWO_FINGER_ZOOM -> {
                                         hudState = null
                                     }
 
@@ -1540,9 +1606,14 @@ fun PlayerScreen(
 
                         IconButton(
                             onClick = {
-                                val next = VideoScaleMode.entries[(scaleMode.ordinal + 1) % VideoScaleMode.entries.size]
-                                scaleMode = next
-                                Toast.makeText(context, "화면 비율: ${next.label}", Toast.LENGTH_SHORT).show()
+                                if (abs(zoomScale - 1.0f) > 0.05f) {
+                                    zoomScale = 1.0f
+                                    Toast.makeText(context, "화면 크기 100% 초기화 (${scaleMode.label})", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val next = VideoScaleMode.entries[(scaleMode.ordinal + 1) % VideoScaleMode.entries.size]
+                                    scaleMode = next
+                                    Toast.makeText(context, "화면 비율: ${next.label}", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             modifier = Modifier.size(34.dp),
                         ) {
