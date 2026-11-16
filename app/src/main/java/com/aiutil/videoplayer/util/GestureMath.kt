@@ -50,15 +50,23 @@ object GestureMath {
         return (stepped * 10f).roundToInt() / 10f
     }
 
-    /** 일반 좌/우 드래그 시 프레임 단위 정밀 탐색 이동 시간(ms) 계산. */
-    fun computeHorizontalSeekDeltaMs(deltaX: Float, viewWidth: Float, durationMs: Long): Long {
+    /** 일반 좌/우 드래그 시 설정된 단위(초 또는 프레임) 기준 탐색 이동 시간(ms) 계산. */
+    fun computeHorizontalSeekDeltaMs(
+        deltaX: Float,
+        viewWidth: Float,
+        durationMs: Long,
+        unit: SeekUnit = SeekUnit.SECONDS,
+        seekSeconds: Int = 30,
+        seekFrames: Int = 30,
+        fps: Float = 30f,
+    ): Long {
         if (viewWidth <= 1f) return 0L
-        val maxSpanMs = if (durationMs > 0L) {
-            minOf(90_000L, maxOf(15_000L, durationMs / 2L))
-        } else {
-            60_000L
+        val effectiveWidth = (viewWidth * 0.8f).coerceAtLeast(1f)
+        val spanMs = when (unit) {
+            SeekUnit.SECONDS -> seekSeconds.coerceAtLeast(1) * 1000L
+            SeekUnit.FRAMES -> framesToMs(seekFrames.coerceAtLeast(1).toLong(), fps).coerceAtLeast(33L)
         }
-        return ((deltaX / viewWidth) * maxSpanMs).roundToLong()
+        return ((deltaX / effectiveWidth) * spanMs).roundToLong()
     }
 
     /** 설정된 단위(초 또는 프레임)에 따른 더블터치 앞/뒤 이동 시간(ms) 계산. */

@@ -359,16 +359,27 @@ fun PlayerScreen(
     }
 
     fun stepSingleFrame(forward: Boolean) {
-        if (exoPlayer.isPlaying) exoPlayer.pause()
+        val unit = latestSettings.seekMoveUnit
         val fps = if (videoFps in 1f..240f) videoFps else latestSettings.defaultFps
-        val frameMs = GestureMath.framesToMs(1L, fps).coerceAtLeast(16L)
-        val target = (exoPlayer.currentPosition + if (forward) frameMs else -frameMs)
+        val deltaMs: Long
+        val label: String
+        if (unit == SeekUnit.SECONDS) {
+            val sec = latestSettings.seekMoveSeconds.coerceAtLeast(1)
+            deltaMs = sec * 1000L
+            label = if (forward) "+${sec}초" else "-${sec}초"
+        } else {
+            if (exoPlayer.isPlaying) exoPlayer.pause()
+            val frames = latestSettings.seekMoveFrames.coerceAtLeast(1)
+            deltaMs = GestureMath.framesToMs(frames.toLong(), fps).coerceAtLeast(16L)
+            label = if (forward) "+${frames} 프레임" else "-${frames} 프레임"
+        }
+        val target = (exoPlayer.currentPosition + if (forward) deltaMs else -deltaMs)
             .coerceIn(0L, durationMs.coerceAtLeast(0L))
         exoPlayer.seekTo(target)
         positionMs = target
         hudState = HudOverlayState(
             icon = if (forward) Icons.Default.FastForward else Icons.Default.FastRewind,
-            title = if (forward) "+1 프레임" else "-1 프레임",
+            title = label,
             subtitle = Format.duration(target),
         )
     }
@@ -893,6 +904,10 @@ fun PlayerScreen(
                                                 deltaX = curX - longPressAnchorX,
                                                 viewWidth = width,
                                                 durationMs = dur,
+                                                unit = latestSettings.seekMoveUnit,
+                                                seekSeconds = latestSettings.seekMoveSeconds,
+                                                seekFrames = latestSettings.seekMoveFrames,
+                                                fps = effectiveFps,
                                             )
                                             val target = (startSeekPos + deltaMs).coerceIn(
                                                 0L,
@@ -1584,7 +1599,13 @@ fun PlayerScreen(
                         )
                     }
 
-                    // 핵심 컴팩트 컨트롤 한 줄: 잠금 / 회전 / -1F / 이전 / 재생 / 다음 / +1F / 자막 / 비율
+                    val stepLabel = if (settings.seekMoveUnit == SeekUnit.SECONDS) {
+                        "${settings.seekMoveSeconds}초"
+                    } else {
+                        "${settings.seekMoveFrames}F"
+                    }
+
+                    // 핵심 컴팩트 컨트롤 한 줄: 잠금 / 회전 / 뒤로이동 / 이전 / 재생 / 다음 / 앞으로이동 / 자막 / 비율
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1625,7 +1646,7 @@ fun PlayerScreen(
                             contentPadding = PaddingValues(horizontal = 4.dp),
                             modifier = Modifier.height(32.dp),
                         ) {
-                            Text("-1F", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Text("-$stepLabel", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
 
                         IconButton(
@@ -1682,7 +1703,7 @@ fun PlayerScreen(
                             contentPadding = PaddingValues(horizontal = 4.dp),
                             modifier = Modifier.height(32.dp),
                         ) {
-                            Text("+1F", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Text("+$stepLabel", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
 
                         IconButton(

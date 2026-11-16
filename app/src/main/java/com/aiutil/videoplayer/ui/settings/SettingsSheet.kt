@@ -68,59 +68,35 @@ fun PlayerSettingsSheet(
 
             HorizontalDivider()
 
-            Text(
-                text = "더블터치 앞/뒤 이동 설정",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
+            SeekStepSelector(
+                title = "더블터치 앞/뒤 이동 설정",
+                unit = settings.doubleTapUnit,
+                seconds = settings.doubleTapSeconds,
+                frames = settings.doubleTapFrames,
+                secondsLabelPrefix = "더블터치 이동 시간",
+                framesLabelPrefix = "더블터치 이동 프레임",
+                secondOptions = listOf(3, 5, 10, 15, 20, 30),
+                frameOptions = listOf(1, 5, 10, 15, 30, 60),
+                onUnitChange = { unit -> onUpdate { it.copy(doubleTapUnit = unit) } },
+                onSecondsChange = { sec -> onUpdate { it.copy(doubleTapSeconds = sec) } },
+                onFramesChange = { fr -> onUpdate { it.copy(doubleTapFrames = fr) } },
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SeekUnit.entries.forEach { unit ->
-                    FilterChip(
-                        selected = settings.doubleTapUnit == unit,
-                        onClick = { onUpdate { it.copy(doubleTapUnit = unit) } },
-                        label = { Text(unit.label) },
-                    )
-                }
-            }
+            HorizontalDivider()
 
-            if (settings.doubleTapUnit == SeekUnit.SECONDS) {
-                val options = listOf(3, 5, 10, 15, 20, 30)
-                Text(
-                    text = "더블터치 이동 시간: ${settings.doubleTapSeconds}초",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    options.forEach { sec ->
-                        FilterChip(
-                            selected = settings.doubleTapSeconds == sec,
-                            onClick = { onUpdate { it.copy(doubleTapSeconds = sec) } },
-                            label = { Text("${sec}초") },
-                        )
-                    }
-                }
-            } else {
-                val frameOptions = listOf(1, 5, 10, 15, 30, 60)
-                Text(
-                    text = "더블터치 이동 프레임: ${settings.doubleTapFrames}프레임",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    frameOptions.forEach { frames ->
-                        FilterChip(
-                            selected = settings.doubleTapFrames == frames,
-                            onClick = { onUpdate { it.copy(doubleTapFrames = frames) } },
-                            label = { Text("${frames}F") },
-                        )
-                    }
-                }
-            }
+            SeekStepSelector(
+                title = "좌/우 드래그 & 앞/뒤 이동 설정",
+                unit = settings.seekMoveUnit,
+                seconds = settings.seekMoveSeconds,
+                frames = settings.seekMoveFrames,
+                secondsLabelPrefix = "좌/우 이동 범위",
+                framesLabelPrefix = "좌/우 이동 프레임",
+                secondOptions = listOf(3, 5, 10, 15, 30, 60, 120, 300),
+                frameOptions = listOf(1, 5, 10, 15, 30, 60, 120),
+                onUnitChange = { unit -> onUpdate { it.copy(seekMoveUnit = unit) } },
+                onSecondsChange = { sec -> onUpdate { it.copy(seekMoveSeconds = sec) } },
+                onFramesChange = { fr -> onUpdate { it.copy(seekMoveFrames = fr) } },
+            )
 
             HorizontalDivider()
 
@@ -258,6 +234,73 @@ fun PlayerSettingsSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun SeekStepSelector(
+    title: String,
+    unit: SeekUnit,
+    seconds: Int,
+    frames: Int,
+    secondsLabelPrefix: String,
+    framesLabelPrefix: String,
+    secondOptions: List<Int>,
+    frameOptions: List<Int>,
+    onUnitChange: (SeekUnit) -> Unit,
+    onSecondsChange: (Int) -> Unit,
+    onFramesChange: (Int) -> Unit,
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SeekUnit.entries.forEach { item ->
+            FilterChip(
+                selected = unit == item,
+                onClick = { onUnitChange(item) },
+                label = { Text(item.label) },
+            )
+        }
+    }
+
+    if (unit == SeekUnit.SECONDS) {
+        Text(
+            text = "$secondsLabelPrefix: ${seconds}초",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            secondOptions.forEach { sec ->
+                FilterChip(
+                    selected = seconds == sec,
+                    onClick = { onSecondsChange(sec) },
+                    label = { Text("${sec}초") },
+                )
+            }
+        }
+    } else {
+        Text(
+            text = "$framesLabelPrefix: ${frames}프레임",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            frameOptions.forEach { count ->
+                FilterChip(
+                    selected = frames == count,
+                    onClick = { onFramesChange(count) },
+                    label = { Text("${count}F") },
+                )
+            }
         }
     }
 }

@@ -156,4 +156,43 @@ class GestureMathTest {
         )
         assertEquals(GestureMath.MIN_ZOOM, slideLeft, 0.001f)
     }
+
+    @Test
+    fun `horizontal seek delta respects seconds and frames unit settings`() {
+        // viewWidth = 1000 -> effectiveWidth = 800
+        // 초 단위(30초 설정): 800px 드래그 시 +30,000ms, -400px 드래그 시 -15,000ms
+        val secForward = GestureMath.computeHorizontalSeekDeltaMs(
+            deltaX = 800f,
+            viewWidth = 1000f,
+            durationMs = 600_000L,
+            unit = SeekUnit.SECONDS,
+            seekSeconds = 30,
+            seekFrames = 30,
+            fps = 30f,
+        )
+        assertEquals(30_000L, secForward)
+
+        val secBackward = GestureMath.computeHorizontalSeekDeltaMs(
+            deltaX = -400f,
+            viewWidth = 1000f,
+            durationMs = 600_000L,
+            unit = SeekUnit.SECONDS,
+            seekSeconds = 30,
+            seekFrames = 30,
+            fps = 30f,
+        )
+        assertEquals(-15_000L, secBackward)
+
+        // 프레임 단위(30fps, 30프레임 설정 -> spanMs = 1000ms): 800px 드래그 시 +1000ms, 400px 시 +500ms
+        val frameForward = GestureMath.computeHorizontalSeekDeltaMs(
+            deltaX = 400f,
+            viewWidth = 1000f,
+            durationMs = 600_000L,
+            unit = SeekUnit.FRAMES,
+            seekSeconds = 30,
+            seekFrames = 30,
+            fps = 30f,
+        )
+        assertEquals(500L, frameForward)
+    }
 }
