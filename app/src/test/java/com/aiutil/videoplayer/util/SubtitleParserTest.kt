@@ -76,4 +76,37 @@ class SubtitleParserTest {
         assertTrue(exported.contains("00:00:01,000 --> 00:00:03,000"))
         assertTrue(exported.contains("좋은 아침입니다"))
     }
+
+    @Test
+    fun `trimCues filters range and shifts timestamps relative to startMs`() {
+        val cues = SubtitleParser.parseSrt(
+            """
+            1
+            00:00:02,000 --> 00:00:05,000
+            Too early
+
+            2
+            00:00:08,000 --> 00:00:12,000
+            Cross start
+
+            3
+            00:00:15,000 --> 00:00:18,000
+            Inside range
+
+            4
+            00:00:25,000 --> 00:00:28,000
+            Too late
+            """.trimIndent()
+        )
+
+        val trimmed = SubtitleParser.trimCues(cues, startMs = 10_000L, endMs = 20_000L)
+        assertEquals(2, trimmed.size)
+        assertEquals(0L, trimmed[0].startMs)
+        assertEquals(2_000L, trimmed[0].endMs)
+        assertEquals("Cross start", trimmed[0].originalText)
+
+        assertEquals(5_000L, trimmed[1].startMs)
+        assertEquals(8_000L, trimmed[1].endMs)
+        assertEquals("Inside range", trimmed[1].originalText)
+    }
 }

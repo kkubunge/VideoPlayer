@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -73,6 +74,7 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -85,6 +87,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -147,6 +150,7 @@ import com.aiutil.videoplayer.App
 import com.aiutil.videoplayer.ai.AiSubtitleController
 import com.aiutil.videoplayer.files.FileExplorerManager
 import com.aiutil.videoplayer.files.VideoScanner
+import com.aiutil.videoplayer.files.VideoTrimmer
 import com.aiutil.videoplayer.model.PlayerSettings
 import com.aiutil.videoplayer.model.ScreenOrientationMode
 import com.aiutil.videoplayer.model.SeekUnit
@@ -279,6 +283,7 @@ fun PlayerScreen(
     var showSubtitleFileDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showBookmarkSheet by remember { mutableStateOf(false) }
+    var showTrimSheet by remember { mutableStateOf(false) }
     var pendingInitialSeek by remember(initialVideo, initialSeekPositionMs) {
         mutableStateOf(initialSeekPositionMs)
     }
@@ -286,6 +291,7 @@ fun PlayerScreen(
     // 즐겨찾기 및 북마크 상태
     val favoriteVideos by App.bookmarks.favoriteVideos.collectAsState()
     val allBookmarks by App.bookmarks.videoBookmarks.collectAsState()
+    val allCues by subtitleController.cues.collectAsState()
     val isCurrentFavorite = remember(favoriteVideos, currentVideo) {
         App.bookmarks.isFavoriteVideo(currentVideo.id, currentVideo.path)
     }
@@ -1211,6 +1217,22 @@ fun PlayerScreen(
                         )
                     }
 
+                    // 동영상 잘라내기 버튼
+                    IconButton(
+                        onClick = {
+                            exoPlayer.pause()
+                            showTrimSheet = true
+                        },
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCut,
+                            contentDescription = "동영상 잘라내기",
+                            tint = Color.White,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+
                     // 즐겨찾기 & 장면 북마크 버튼
                     IconButton(
                         onClick = { showBookmarkSheet = true },
@@ -1278,6 +1300,15 @@ fun PlayerScreen(
                             expanded = showMoreMenu,
                             onDismissRequest = { showMoreMenu = false },
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("동영상 구간 잘라내기") },
+                                leadingIcon = { Icon(Icons.Default.ContentCut, null) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    exoPlayer.pause()
+                                    showTrimSheet = true
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("오디오 · 내장 자막 트랙") },
                                 leadingIcon = { Icon(Icons.Default.Audiotrack, null) },
@@ -2031,6 +2062,251 @@ fun PlayerScreen(
                                 }
                             }
                         }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
+        }
+    }
+
+    // 동영상 구간 잘라내기 바텀 시트
+    if (showTrimSheet) {
+        val totalMs = durationMs.coerceAtLeast(exoPlayer.duration.coerceAtLeast(2_000L))
+        val initStart = remember(currentVideo.id, showTrimSheet) {
+            val a = repeatA
+            val b = repeatB
+            if (a != null && b != null && b > a + 500L) {
+                a.coerceIn(0L, totalMs - 500L)
+            } else {
+                val cur = exoPlayer.currentPosition.coerceIn(0L, totalMs)
+                if (cur >= totalMs - 2_000L) (totalMs - 15_000L).coerceAtLeast(0L) else cur
+            }
+        }
+        val initEnd = remember(currentVideo.id, showTrimSheet) {
+            val a = repeatA
+            val b = repeatB
+            if (a != null && b != null && b > a + 500L) {
+                b.coerceIn(initStart + 500L, totalMs)
+            } else {
+                (initStart + 15_000L).coerceIn(initStart + 500L, totalMs)
+            }
+        }
+
+        var trimStartMs by remember(currentVideo.id, showTrimSheet) { mutableLongStateOf(initStart) }
+        var trimEndMs by remember(currentVideo.id, showTrimSheet) { mutableLongStateOf(initEnd) }
+        var outputName by remember(currentVideo.id, showTrimSheet) {
+            mutableStateOf("${File(currentVideo.title).nameWithoutExtension}_cut")
+        }
+        var isTrimming by remember { mutableStateOf(false) }
+        var lastSavedClip by remember { mutableStateOf<File?>(null) }
+
+        ModalBottomSheet(
+            onDismissRequest = { if (!isTrimming) showTrimSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "동영상 구간 잘라내기 (무손실)",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "선택 구간: ${Format.duration(trimStartMs)} ~ ${Format.duration(trimEndMs)} (길이 ${Format.duration((trimEndMs - trimStartMs).coerceAtLeast(0L))})",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+
+                RangeSlider(
+                    value = trimStartMs.toFloat()..trimEndMs.toFloat(),
+                    onValueChange = { range ->
+                        val s = range.start.roundToLong().coerceIn(0L, totalMs - 500L)
+                        val e = range.endInclusive.roundToLong().coerceIn(s + 500L, totalMs)
+                        val previewPos = if (abs(s - trimStartMs) > abs(e - trimEndMs)) s else e
+                        trimStartMs = s
+                        trimEndMs = e
+                        exoPlayer.seekTo(previewPos)
+                    },
+                    valueRange = 0f..totalMs.toFloat(),
+                    enabled = !isTrimming,
+                )
+
+                // 시작 / 끝 미세 조절 버튼
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("시작 ", style = MaterialTheme.typography.labelMedium)
+                        TextButton(
+                            onClick = {
+                                trimStartMs = (trimStartMs - 1_000L).coerceAtLeast(0L)
+                                exoPlayer.seekTo(trimStartMs)
+                            },
+                            enabled = !isTrimming,
+                            contentPadding = PaddingValues(horizontal = 6.dp),
+                        ) { Text("-1초") }
+                        TextButton(
+                            onClick = {
+                                trimStartMs = (trimStartMs + 1_000L).coerceAtMost(trimEndMs - 500L)
+                                exoPlayer.seekTo(trimStartMs)
+                            },
+                            enabled = !isTrimming,
+                            contentPadding = PaddingValues(horizontal = 6.dp),
+                        ) { Text("+1초") }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("끝 ", style = MaterialTheme.typography.labelMedium)
+                        TextButton(
+                            onClick = {
+                                trimEndMs = (trimEndMs - 1_000L).coerceAtLeast(trimStartMs + 500L)
+                                exoPlayer.seekTo(trimEndMs)
+                            },
+                            enabled = !isTrimming,
+                            contentPadding = PaddingValues(horizontal = 6.dp),
+                        ) { Text("-1초") }
+                        TextButton(
+                            onClick = {
+                                trimEndMs = (trimEndMs + 1_000L).coerceAtMost(totalMs)
+                                exoPlayer.seekTo(trimEndMs)
+                            },
+                            enabled = !isTrimming,
+                            contentPadding = PaddingValues(horizontal = 6.dp),
+                        ) { Text("+1초") }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val cur = exoPlayer.currentPosition.coerceIn(0L, trimEndMs - 500L)
+                            trimStartMs = cur
+                        },
+                        enabled = !isTrimming,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("현재 위치 → 시작") }
+                    OutlinedButton(
+                        onClick = {
+                            val cur = exoPlayer.currentPosition.coerceIn(trimStartMs + 500L, totalMs)
+                            trimEndMs = cur
+                        },
+                        enabled = !isTrimming,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("현재 위치 → 끝") }
+                }
+
+                OutlinedTextField(
+                    value = outputName,
+                    onValueChange = { outputName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("저장할 파일 이름 (.mp4)") },
+                    singleLine = true,
+                    enabled = !isTrimming,
+                )
+
+                if (isTrimming) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("구간 잘라내기 처리 중...")
+                    }
+                }
+
+                val savedFile = lastSavedClip
+                if (savedFile != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "저장됨: ${savedFile.name}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = {
+                                    val newItem = VideoScanner.videoItemFromFile(savedFile, extractMetadata = true)
+                                    playlist = listOf(newItem) + playlist
+                                    currentIndex = 0
+                                    showTrimSheet = false
+                                },
+                            ) { Text("바로 재생") }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { showTrimSheet = false },
+                        enabled = !isTrimming,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("닫기") }
+                    Button(
+                        onClick = {
+                            isTrimming = true
+                            lastSavedClip = null
+                            scope.launch {
+                                val res = VideoTrimmer.trimVideo(
+                                    context = context,
+                                    video = currentVideo,
+                                    startMs = trimStartMs,
+                                    endMs = trimEndMs,
+                                    desiredFileName = outputName,
+                                    cues = allCues,
+                                )
+                                isTrimming = false
+                                res.onSuccess { outFile ->
+                                    lastSavedClip = outFile
+                                    onDeletedVideo(currentVideo.id)
+                                    Toast.makeText(
+                                        context,
+                                        "잘라내기 완료: ${outFile.name}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }.onFailure { err ->
+                                    Toast.makeText(
+                                        context,
+                                        err.message ?: "잘라내기에 실패했습니다.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        },
+                        enabled = !isTrimming && outputName.isNotBlank() && trimEndMs > trimStartMs + 300L,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Default.ContentCut, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("잘라내기 저장")
                     }
                 }
                 Spacer(Modifier.height(14.dp))

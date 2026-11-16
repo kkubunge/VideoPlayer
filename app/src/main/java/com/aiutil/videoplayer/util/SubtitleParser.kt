@@ -195,6 +195,27 @@ object SubtitleParser {
         }
     }
 
+    /** 지정된 구간 [startMs, endMs] 에 해당하는 자막만 추출하고 시작 시간을 0ms 기준으로 보정한다. */
+    fun trimCues(
+        cues: List<SubtitleCue>,
+        startMs: Long,
+        endMs: Long,
+    ): List<SubtitleCue> {
+        if (cues.isEmpty() || endMs <= startMs) return emptyList()
+        val duration = endMs - startMs
+        var nextIndex = 1
+        return cues.mapNotNull { cue ->
+            if (cue.endMs <= startMs || cue.startMs >= endMs) return@mapNotNull null
+            val shiftedStart = (cue.startMs - startMs).coerceIn(0L, duration)
+            val shiftedEnd = (cue.endMs - startMs).coerceIn(shiftedStart + 100L, duration + 200L)
+            cue.copy(
+                index = nextIndex++,
+                startMs = shiftedStart,
+                endMs = shiftedEnd,
+            )
+        }
+    }
+
     private fun parseArrowLine(line: String): Pair<Long, Long>? {
         val parts = line.split("-->")
         if (parts.size < 2) return null
