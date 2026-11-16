@@ -870,13 +870,17 @@ fun PlayerScreen(
                                             lastSingleTapJobPending = true
                                             pendingTapTime = SystemClock.uptimeMillis()
                                             pendingTapX = startX
-                                            val nextEvent = withTimeoutOrNull<PointerEvent>(
+                                            val nextEvent: PointerEvent? = withTimeoutOrNull(
                                                 viewConfig.doubleTapTimeoutMillis
                                             ) {
-                                                while (true) {
+                                                var pressedEvent: PointerEvent? = null
+                                                while (pressedEvent == null) {
                                                     val e = awaitPointerEvent()
-                                                    if (e.type == PointerEventType.Press) return@withTimeoutOrNull e
+                                                    if (e.type == PointerEventType.Press) {
+                                                        pressedEvent = e
+                                                    }
                                                 }
+                                                pressedEvent
                                             }
                                             if (nextEvent == null) {
                                                 // 더블터치가 안 들어왔으므로 싱글 탭 확정
