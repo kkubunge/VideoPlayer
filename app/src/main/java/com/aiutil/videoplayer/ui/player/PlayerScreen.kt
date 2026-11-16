@@ -5,7 +5,9 @@ import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.graphics.Bitmap
 import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
@@ -18,7 +20,9 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -87,6 +91,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -114,12 +119,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -598,11 +606,16 @@ fun PlayerScreen(
     }
 
     BackHandler {
-        if (isLocked) {
-            controlsVisible = true
-            Toast.makeText(context, "화면 잠금을 먼저 해제해 주세요.", Toast.LENGTH_SHORT).show()
-        } else {
-            onExit()
+        when {
+            showTrimSheet -> {
+                exoPlayer.pause()
+                showTrimSheet = false
+            }
+            isLocked -> {
+                controlsVisible = true
+                Toast.makeText(context, "화면 잠금을 먼저 해제해 주세요.", Toast.LENGTH_SHORT).show()
+            }
+            else -> onExit()
         }
     }
 
@@ -652,7 +665,7 @@ fun PlayerScreen(
         }
 
         // 2. 제스처 인식 레이어 (밝기 / 볼륨 / 길게터치 배속 / 프레임 좌우드래그 / 더블터치 / 싱글탭)
-        if (!isInPipMode) {
+        if (!isInPipMode && !showTrimSheet) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1196,7 +1209,7 @@ fun PlayerScreen(
 
         // 7. 컴팩트 상/하단 컨트롤 오버레이 (화면 터치 시 표시)
         AnimatedVisibility(
-            visible = controlsVisible && !isLocked && !isInPipMode,
+            visible = controlsVisible && !isLocked && !isInPipMode && !showTrimSheet,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxSize(),
@@ -1623,6 +1636,396 @@ fun PlayerScreen(
                                 tint = Color.White,
                                 modifier = Modifier.size(18.dp),
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 8. 동영상 구간 잘라내기 & 실시간 미리보기 오버레이 패널 (상단 영상 노출 유지)
+        if (showTrimSheet && !isInPipMode) {
+            val totalMs = durationMs.coerceAtLeast(exoPlayer.duration.coerceAtLeast(2_000L))
+            val initStart = remember(currentVideo.id, showTrimSheet) {
+                val a = repeatA
+                val b = repeatB
+                if (a != null && b != null && b > a + 500L) {
+                    a.coerceIn(0L, totalMs - 500L)
+                } else {
+                    val cur = exoPlayer.currentPosition.coerceIn(0L, totalMs)
+                    if (cur >= totalMs - 2_000L) (totalMs - 15_000L).coerceAtLeast(0L) else cur
+                }
+            }
+            val initEnd = remember(currentVideo.id, showTrimSheet) {
+                val a = repeatA
+                val b = repeatB
+                if (a != null && b != null && b > a + 500L) {
+                    b.coerceIn(initStart + 500L, totalMs)
+                } else {
+                    (initStart + 15_000L).coerceIn(initStart + 500L, totalMs)
+                }
+            }
+
+            var trimStartMs by remember(currentVideo.id, showTrimSheet) { mutableLongStateOf(initStart) }
+            var trimEndMs by remember(currentVideo.id, showTrimSheet) { mutableLongStateOf(initEnd) }
+            var outputName by remember(currentVideo.id, showTrimSheet) {
+                mutableStateOf("${File(currentVideo.title).nameWithoutExtension}_cut")
+            }
+            var isPreviewingTrim by remember(currentVideo.id, showTrimSheet) { mutableStateOf(false) }
+            var isTrimming by remember { mutableStateOf(false) }
+            var lastSavedClip by remember { mutableStateOf<File?>(null) }
+            var startThumb by remember(currentVideo.id) { mutableStateOf<ImageBitmap?>(null) }
+            var endThumb by remember(currentVideo.id) { mutableStateOf<ImageBitmap?>(null) }
+
+            // 시작 지점 프레임 썸네일 추출 (디바운스)
+            LaunchedEffect(currentVideo.id, trimStartMs) {
+                delay(120L)
+                startThumb = withContext(Dispatchers.IO) {
+                    extractPreviewFrame(context, currentVideo, trimStartMs)
+                }
+            }
+            // 끝 지점 프레임 썸네일 추출 (디바운스)
+            LaunchedEffect(currentVideo.id, trimEndMs) {
+                delay(120L)
+                endThumb = withContext(Dispatchers.IO) {
+                    extractPreviewFrame(context, currentVideo, trimEndMs)
+                }
+            }
+
+            // 구간 미리보기 재생 루프 (trimStartMs ~ trimEndMs 구간만 반복 재생)
+            LaunchedEffect(isPreviewingTrim, trimStartMs, trimEndMs) {
+                if (!isPreviewingTrim) return@LaunchedEffect
+                exoPlayer.seekTo(trimStartMs)
+                exoPlayer.play()
+                while (isPreviewingTrim) {
+                    val pos = exoPlayer.currentPosition
+                    positionMs = pos
+                    if (pos >= trimEndMs || pos < trimStartMs - 500L) {
+                        exoPlayer.seekTo(trimStartMs)
+                    }
+                    delay(80L)
+                }
+            }
+
+            fun previewSeekTo(targetMs: Long) {
+                isPreviewingTrim = false
+                if (exoPlayer.isPlaying) exoPlayer.pause()
+                exoPlayer.seekTo(targetMs)
+                positionMs = targetMs
+            }
+
+            val fps = if (videoFps in 1f..240f) videoFps else latestSettings.defaultFps
+            val oneFrameMs = GestureMath.framesToMs(1L, fps).coerceAtLeast(16L)
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                color = Color.Black.copy(alpha = 0.80f),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    // 1. 헤더 & 선택 구간 정보
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "구간 잘라내기 & 미리보기",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            val curPreviewStr = if (isPreviewingTrim) {
+                                " · 미리보기 ${Format.duration(positionMs)}"
+                            } else {
+                                ""
+                            }
+                            Text(
+                                text = "${Format.duration(trimStartMs)} ~ ${Format.duration(trimEndMs)} (길이 ${Format.duration((trimEndMs - trimStartMs).coerceAtLeast(0L))})$curPreviewStr",
+                                color = Color(0xFF64B5F6),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (!isTrimming) {
+                                    isPreviewingTrim = false
+                                    showTrimSheet = false
+                                }
+                            },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Color.White)
+                        }
+                    }
+
+                    // 2. 시작 장면 썸네일 + [▶ 구간 미리보기] 버튼 + 끝 장면 썸네일
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TrimFramePreviewChip(
+                            label = "시작 ${Format.duration(trimStartMs)}",
+                            bitmap = startThumb,
+                            onClick = { previewSeekTo(trimStartMs) },
+                        )
+
+                        Surface(
+                            color = if (isPreviewingTrim) Color(0xFFE53935) else Color(0xFF1E88E5),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.clickable(enabled = !isTrimming) {
+                                if (isPreviewingTrim) {
+                                    isPreviewingTrim = false
+                                    exoPlayer.pause()
+                                } else {
+                                    isPreviewingTrim = true
+                                }
+                            },
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    imageVector = if (isPreviewingTrim) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Text(
+                                    text = if (isPreviewingTrim) "미리보기 정지" else "구간 미리보기",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+
+                        TrimFramePreviewChip(
+                            label = "끝 ${Format.duration(trimEndMs)}",
+                            bitmap = endThumb,
+                            onClick = { previewSeekTo(trimEndMs) },
+                        )
+                    }
+
+                    // 3. 구간 슬라이더 + 미리보기 재생 위치 표시 바
+                    RangeSlider(
+                        value = trimStartMs.toFloat()..trimEndMs.toFloat(),
+                        onValueChange = { range ->
+                            val s = range.start.roundToLong().coerceIn(0L, totalMs - 500L)
+                            val e = range.endInclusive.roundToLong().coerceIn(s + 500L, totalMs)
+                            val previewPos = if (abs(s - trimStartMs) > abs(e - trimEndMs)) s else e
+                            trimStartMs = s
+                            trimEndMs = e
+                            previewSeekTo(previewPos)
+                        },
+                        valueRange = 0f..totalMs.toFloat(),
+                        enabled = !isTrimming,
+                        modifier = Modifier.height(28.dp),
+                    )
+                    if (isPreviewingTrim && trimEndMs > trimStartMs) {
+                        val previewRatio = ((positionMs - trimStartMs).toFloat() / (trimEndMs - trimStartMs).toFloat())
+                            .coerceIn(0f, 1f)
+                        LinearProgressIndicator(
+                            progress = { previewRatio },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = Color(0xFF64B5F6),
+                            trackColor = Color.White.copy(alpha = 0.2f),
+                        )
+                    }
+
+                    // 4. 시작/끝 초·프레임 미세 조절 버튼
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("시작:", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                        TrimStepChip("-1초", enabled = !isTrimming) {
+                            trimStartMs = (trimStartMs - 1_000L).coerceAtLeast(0L)
+                            previewSeekTo(trimStartMs)
+                        }
+                        TrimStepChip("-1F", enabled = !isTrimming) {
+                            trimStartMs = (trimStartMs - oneFrameMs).coerceAtLeast(0L)
+                            previewSeekTo(trimStartMs)
+                        }
+                        TrimStepChip("+1F", enabled = !isTrimming) {
+                            trimStartMs = (trimStartMs + oneFrameMs).coerceAtMost(trimEndMs - 500L)
+                            previewSeekTo(trimStartMs)
+                        }
+                        TrimStepChip("+1초", enabled = !isTrimming) {
+                            trimStartMs = (trimStartMs + 1_000L).coerceAtMost(trimEndMs - 500L)
+                            previewSeekTo(trimStartMs)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("끝:", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                        TrimStepChip("-1초", enabled = !isTrimming) {
+                            trimEndMs = (trimEndMs - 1_000L).coerceAtLeast(trimStartMs + 500L)
+                            previewSeekTo(trimEndMs)
+                        }
+                        TrimStepChip("-1F", enabled = !isTrimming) {
+                            trimEndMs = (trimEndMs - oneFrameMs).coerceAtLeast(trimStartMs + 500L)
+                            previewSeekTo(trimEndMs)
+                        }
+                        TrimStepChip("+1F", enabled = !isTrimming) {
+                            trimEndMs = (trimEndMs + oneFrameMs).coerceAtMost(totalMs)
+                            previewSeekTo(trimEndMs)
+                        }
+                        TrimStepChip("+1초", enabled = !isTrimming) {
+                            trimEndMs = (trimEndMs + 1_000L).coerceAtMost(totalMs)
+                            previewSeekTo(trimEndMs)
+                        }
+                    }
+
+                    // 5. 저장 파일명 & 현재위치 지정
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = outputName,
+                            onValueChange = { outputName = it },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("저장 파일명 (.mp4)", fontSize = 11.sp) },
+                            singleLine = true,
+                            enabled = !isTrimming,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(0xFF64B5F6),
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
+                                focusedLabelColor = Color(0xFF64B5F6),
+                                unfocusedLabelColor = Color.White.copy(alpha = 0.7f),
+                            ),
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TrimStepChip("현재→시작", enabled = !isTrimming) {
+                                trimStartMs = exoPlayer.currentPosition.coerceIn(0L, trimEndMs - 500L)
+                            }
+                            TrimStepChip("현재→끝", enabled = !isTrimming) {
+                                trimEndMs = exoPlayer.currentPosition.coerceIn(trimStartMs + 500L, totalMs)
+                            }
+                        }
+                    }
+
+                    if (isTrimming) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("무손실 잘라내기 처리 중...", color = Color.White, fontSize = 12.sp)
+                        }
+                    }
+
+                    val savedFile = lastSavedClip
+                    if (savedFile != null) {
+                        Surface(
+                            color = Color(0xFF1E88E5).copy(alpha = 0.28f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "저장됨: ${savedFile.name}",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(
+                                    onClick = {
+                                        isPreviewingTrim = false
+                                        val newItem = VideoScanner.videoItemFromFile(savedFile, extractMetadata = true)
+                                        playlist = listOf(newItem) + playlist
+                                        currentIndex = 0
+                                        showTrimSheet = false
+                                    },
+                                ) { Text("바로 재생", color = Color(0xFF90CAF9)) }
+                            }
+                        }
+                    }
+
+                    // 6. 하단 저장 버튼
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                isPreviewingTrim = false
+                                showTrimSheet = false
+                            },
+                            enabled = !isTrimming,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("닫기", color = Color.White) }
+                        Button(
+                            onClick = {
+                                isPreviewingTrim = false
+                                exoPlayer.pause()
+                                isTrimming = true
+                                lastSavedClip = null
+                                scope.launch {
+                                    val res = VideoTrimmer.trimVideo(
+                                        context = context,
+                                        video = currentVideo,
+                                        startMs = trimStartMs,
+                                        endMs = trimEndMs,
+                                        desiredFileName = outputName,
+                                        cues = allCues,
+                                    )
+                                    isTrimming = false
+                                    res.onSuccess { outFile ->
+                                        lastSavedClip = outFile
+                                        onDeletedVideo(currentVideo.id)
+                                        Toast.makeText(
+                                            context,
+                                            "잘라내기 완료: ${outFile.name}",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }.onFailure { err ->
+                                        Toast.makeText(
+                                            context,
+                                            err.message ?: "잘라내기에 실패했습니다.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            },
+                            enabled = !isTrimming && outputName.isNotBlank() && trimEndMs > trimStartMs + 300L,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Default.ContentCut, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("잘라내기 저장")
                         }
                     }
                 }
@@ -2139,250 +2542,97 @@ fun PlayerScreen(
             }
         }
     }
+}
 
-    // 동영상 구간 잘라내기 바텀 시트
-    if (showTrimSheet) {
-        val totalMs = durationMs.coerceAtLeast(exoPlayer.duration.coerceAtLeast(2_000L))
-        val initStart = remember(currentVideo.id, showTrimSheet) {
-            val a = repeatA
-            val b = repeatB
-            if (a != null && b != null && b > a + 500L) {
-                a.coerceIn(0L, totalMs - 500L)
-            } else {
-                val cur = exoPlayer.currentPosition.coerceIn(0L, totalMs)
-                if (cur >= totalMs - 2_000L) (totalMs - 15_000L).coerceAtLeast(0L) else cur
-            }
-        }
-        val initEnd = remember(currentVideo.id, showTrimSheet) {
-            val a = repeatA
-            val b = repeatB
-            if (a != null && b != null && b > a + 500L) {
-                b.coerceIn(initStart + 500L, totalMs)
-            } else {
-                (initStart + 15_000L).coerceIn(initStart + 500L, totalMs)
-            }
-        }
-
-        var trimStartMs by remember(currentVideo.id, showTrimSheet) { mutableLongStateOf(initStart) }
-        var trimEndMs by remember(currentVideo.id, showTrimSheet) { mutableLongStateOf(initEnd) }
-        var outputName by remember(currentVideo.id, showTrimSheet) {
-            mutableStateOf("${File(currentVideo.title).nameWithoutExtension}_cut")
-        }
-        var isTrimming by remember { mutableStateOf(false) }
-        var lastSavedClip by remember { mutableStateOf<File?>(null) }
-
-        ModalBottomSheet(
-            onDismissRequest = { if (!isTrimming) showTrimSheet = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+@Composable
+private fun TrimFramePreviewChip(
+    label: String,
+    bitmap: ImageBitmap?,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 72.dp, height = 42.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    text = "동영상 구간 잘라내기 (무손실)",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = label,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
                 )
-                Text(
-                    text = "선택 구간: ${Format.duration(trimStartMs)} ~ ${Format.duration(trimEndMs)} (길이 ${Format.duration((trimEndMs - trimStartMs).coerceAtLeast(0L))})",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.size(16.dp),
                 )
-
-                RangeSlider(
-                    value = trimStartMs.toFloat()..trimEndMs.toFloat(),
-                    onValueChange = { range ->
-                        val s = range.start.roundToLong().coerceIn(0L, totalMs - 500L)
-                        val e = range.endInclusive.roundToLong().coerceIn(s + 500L, totalMs)
-                        val previewPos = if (abs(s - trimStartMs) > abs(e - trimEndMs)) s else e
-                        trimStartMs = s
-                        trimEndMs = e
-                        exoPlayer.seekTo(previewPos)
-                    },
-                    valueRange = 0f..totalMs.toFloat(),
-                    enabled = !isTrimming,
-                )
-
-                // 시작 / 끝 미세 조절 버튼
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("시작 ", style = MaterialTheme.typography.labelMedium)
-                        TextButton(
-                            onClick = {
-                                trimStartMs = (trimStartMs - 1_000L).coerceAtLeast(0L)
-                                exoPlayer.seekTo(trimStartMs)
-                            },
-                            enabled = !isTrimming,
-                            contentPadding = PaddingValues(horizontal = 6.dp),
-                        ) { Text("-1초") }
-                        TextButton(
-                            onClick = {
-                                trimStartMs = (trimStartMs + 1_000L).coerceAtMost(trimEndMs - 500L)
-                                exoPlayer.seekTo(trimStartMs)
-                            },
-                            enabled = !isTrimming,
-                            contentPadding = PaddingValues(horizontal = 6.dp),
-                        ) { Text("+1초") }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("끝 ", style = MaterialTheme.typography.labelMedium)
-                        TextButton(
-                            onClick = {
-                                trimEndMs = (trimEndMs - 1_000L).coerceAtLeast(trimStartMs + 500L)
-                                exoPlayer.seekTo(trimEndMs)
-                            },
-                            enabled = !isTrimming,
-                            contentPadding = PaddingValues(horizontal = 6.dp),
-                        ) { Text("-1초") }
-                        TextButton(
-                            onClick = {
-                                trimEndMs = (trimEndMs + 1_000L).coerceAtMost(totalMs)
-                                exoPlayer.seekTo(trimEndMs)
-                            },
-                            enabled = !isTrimming,
-                            contentPadding = PaddingValues(horizontal = 6.dp),
-                        ) { Text("+1초") }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            val cur = exoPlayer.currentPosition.coerceIn(0L, trimEndMs - 500L)
-                            trimStartMs = cur
-                        },
-                        enabled = !isTrimming,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("현재 위치 → 시작") }
-                    OutlinedButton(
-                        onClick = {
-                            val cur = exoPlayer.currentPosition.coerceIn(trimStartMs + 500L, totalMs)
-                            trimEndMs = cur
-                        },
-                        enabled = !isTrimming,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("현재 위치 → 끝") }
-                }
-
-                OutlinedTextField(
-                    value = outputName,
-                    onValueChange = { outputName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("저장할 파일 이름 (.mp4)") },
-                    singleLine = true,
-                    enabled = !isTrimming,
-                )
-
-                if (isTrimming) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text("구간 잘라내기 처리 중...")
-                    }
-                }
-
-                val savedFile = lastSavedClip
-                if (savedFile != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "저장됨: ${savedFile.name}",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(
-                                onClick = {
-                                    val newItem = VideoScanner.videoItemFromFile(savedFile, extractMetadata = true)
-                                    playlist = listOf(newItem) + playlist
-                                    currentIndex = 0
-                                    showTrimSheet = false
-                                },
-                            ) { Text("바로 재생") }
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { showTrimSheet = false },
-                        enabled = !isTrimming,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("닫기") }
-                    Button(
-                        onClick = {
-                            isTrimming = true
-                            lastSavedClip = null
-                            scope.launch {
-                                val res = VideoTrimmer.trimVideo(
-                                    context = context,
-                                    video = currentVideo,
-                                    startMs = trimStartMs,
-                                    endMs = trimEndMs,
-                                    desiredFileName = outputName,
-                                    cues = allCues,
-                                )
-                                isTrimming = false
-                                res.onSuccess { outFile ->
-                                    lastSavedClip = outFile
-                                    onDeletedVideo(currentVideo.id)
-                                    Toast.makeText(
-                                        context,
-                                        "잘라내기 완료: ${outFile.name}",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }.onFailure { err ->
-                                    Toast.makeText(
-                                        context,
-                                        err.message ?: "잘라내기에 실패했습니다.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
-                        },
-                        enabled = !isTrimming && outputName.isNotBlank() && trimEndMs > trimStartMs + 300L,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(Icons.Default.ContentCut, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("잘라내기 저장")
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
             }
         }
+        Spacer(Modifier.height(2.dp))
+        Text(text = label, color = Color.White, fontSize = 10.sp)
+    }
+}
+
+@Composable
+private fun TrimStepChip(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = Color.White.copy(alpha = if (enabled) 0.16f else 0.08f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = if (enabled) 1f else 0.4f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
+
+private fun extractPreviewFrame(
+    context: Context,
+    video: VideoItem,
+    timeMs: Long,
+): ImageBitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        if (video.path.isNotBlank() && File(video.path).canRead()) {
+            retriever.setDataSource(video.path)
+        } else {
+            retriever.setDataSource(context, Uri.parse(video.uri))
+        }
+        val timeUs = timeMs.coerceAtLeast(0L) * 1_000L
+        val bmp: Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+                timeUs,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                220,
+                124,
+            ) ?: retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } else {
+            retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }
+        bmp?.asImageBitmap()
+    } catch (_: Throwable) {
+        null
+    } finally {
+        runCatching { retriever.release() }
     }
 }
 
