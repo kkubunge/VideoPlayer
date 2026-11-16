@@ -373,7 +373,11 @@ fun ExplorerScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         } else {
-                            Text("MX AI 플레이어")
+                            Text(
+                                text = "꺼벙이플레이어 (kkubunge Player)",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     },
                     navigationIcon = {
