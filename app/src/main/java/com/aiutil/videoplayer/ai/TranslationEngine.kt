@@ -181,13 +181,15 @@ class TranslationEngine {
             val bodyJson = buildJsonObject {
                 put("contents", buildJsonArray {
                     add(buildJsonObject {
+                        put("role", "user")
                         put("parts", buildJsonArray {
                             add(buildJsonObject {
                                 put("text", prompt)
                             })
                             add(buildJsonObject {
-                                put("inline_data", buildJsonObject {
-                                    put("mime_type", "audio/wav")
+                                // Vertex AI 및 Generative Language API 공통 호환을 위해 카멜케이스 필드 사용
+                                put("inlineData", buildJsonObject {
+                                    put("mimeType", "audio/wav")
                                     put("data", base64Audio)
                                 })
                             })
@@ -200,35 +202,23 @@ class TranslationEngine {
                 })
             }.toString()
 
-            val url =
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${
-                    URLEncoder.encode(geminiApiKey.trim(), "UTF-8")
-                }"
-            val request = Request.Builder()
-                .url(url)
-                .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .build()
-
-            httpClient.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext emptyList()
-                val raw = resp.body?.string() ?: return@withContext emptyList()
-                val textPayload = extractGeminiText(raw) ?: return@withContext emptyList()
-                val cleanArrayText = extractJsonArray(textPayload) ?: return@withContext emptyList()
-                val arr = json.parseToJsonElement(cleanArrayText).jsonArray
-                arr.mapNotNull { el ->
-                    val obj = el.jsonObject
-                    val orig = obj["original"]?.jsonPrimitive?.content?.trim().orEmpty()
-                    val trans = obj["translated"]?.jsonPrimitive?.content?.trim().orEmpty()
-                    if (orig.isBlank() && trans.isBlank()) return@mapNotNull null
-                    val s = obj["startMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
-                    val e = obj["endMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: (s + 3000L)
-                    TranscribedSubtitle(
-                        startOffsetMs = s.coerceAtLeast(0L),
-                        endOffsetMs = e.coerceAtLeast(s + 800L),
-                        originalText = orig.ifBlank { trans },
-                        translatedText = trans.ifBlank { orig },
-                    )
-                }
+            val textPayload = callGeminiGenerateContent(bodyJson, geminiApiKey)
+                ?: return@withContext emptyList()
+            val cleanArrayText = extractJsonArray(textPayload) ?: return@withContext emptyList()
+            val arr = json.parseToJsonElement(cleanArrayText).jsonArray
+            arr.mapNotNull { el ->
+                val obj = el.jsonObject
+                val orig = obj["original"]?.jsonPrimitive?.content?.trim().orEmpty()
+                val trans = obj["translated"]?.jsonPrimitive?.content?.trim().orEmpty()
+                if (orig.isBlank() && trans.isBlank()) return@mapNotNull null
+                val s = obj["startMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+                val e = obj["endMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: (s + 3000L)
+                TranscribedSubtitle(
+                    startOffsetMs = s.coerceAtLeast(0L),
+                    endOffsetMs = e.coerceAtLeast(s + 800L),
+                    originalText = orig.ifBlank { trans },
+                    translatedText = trans.ifBlank { orig },
+                )
             }
         }.getOrDefault(emptyList())
     }
@@ -330,6 +320,7 @@ class TranslationEngine {
             val bodyJson = buildJsonObject {
                 put("contents", buildJsonArray {
                     add(buildJsonObject {
+                        put("role", "user")
                         put("parts", buildJsonArray {
                             add(buildJsonObject { put("text", prompt) })
                         })
@@ -341,24 +332,37 @@ class TranslationEngine {
                 })
             }.toString()
 
-            val url =
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${
-                    URLEncoder.encode(geminiApiKey.trim(), "UTF-8")
-                }"
-            val request = Request.Builder()
-                .url(url)
-                .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .build()
-
-            httpClient.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext emptyList()
-                val raw = resp.body?.string() ?: return@withContext emptyList()
-                val textPayload = extractGeminiText(raw) ?: return@withContext emptyList()
-                val arrText = extractJsonArray(textPayload) ?: return@withContext emptyList()
-                val arr = json.parseToJsonElement(arrText).jsonArray
-                arr.map { it.jsonPrimitive.content }
-            }
+            val textPayload = callGeminiGenerateContent(bodyJson, geminiApiKey)
+                ?: return@withContext emptyList()
+            val arrText = extractJsonArray(textPayload) ?: return@withContext emptyList()
+            val arr = json.parseToJsonElement(arrText).jsonArray
+            arr.map { it.jsonPrimitive.content }
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * API 키 유형(`AQ.` / `AIza...`)에 맞는 Gemini 엔드포인트들을 우선순위대로 호출해 응답 텍스트를 반환한다.
+     */
+    private fun callGeminiGenerateContent(bodyJson: String, rawApiKey: String): String? {
+        val cleanKey = rawApiKey.trim()
+        if (cleanKey.isEmpty()) return null
+        val mediaType = "application/json; charset=utf-8".toMediaType()
+        for (url in resolveGeminiEndpoints(cleanKey)) {
+            val result = runCatching {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("x-goog-api-key", cleanKey)
+                    .post(bodyJson.toRequestBody(mediaType))
+                    .build()
+                httpClient.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    val raw = resp.body?.string() ?: return@use null
+                    extractGeminiText(raw)
+                }
+            }.getOrNull()
+            if (!result.isNullOrBlank()) return result
+        }
+        return null
     }
 
     private fun extractGeminiText(responseBody: String): String? {
@@ -383,5 +387,25 @@ class TranslationEngine {
         translators.values.forEach { runCatching { it.close() } }
         translators.clear()
         runCatching { languageIdentifier.close() }
+    }
+}
+
+/**
+ * Gemini API 키 접두어에 따라 호출할 엔드포인트 우선순위 목록을 반환한다.
+ * - `AQ.`로 시작하는 키: Vertex AI Express Mode / 신규 Cloud 키 우선, 실패 시 AI Studio 폴백
+ * - 그 외(`AIza...` 등): AI Studio 엔드포인트 우선, 실패 시 Vertex AI Express Mode 폴백
+ */
+internal fun resolveGeminiEndpoints(apiKey: String): List<String> {
+    val cleanKey = apiKey.trim()
+    if (cleanKey.isEmpty()) return emptyList()
+    val encodedKey = URLEncoder.encode(cleanKey, "UTF-8")
+    val vertexUrl =
+        "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent?key=$encodedKey"
+    val aiStudioUrl =
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$encodedKey"
+    return if (cleanKey.startsWith("AQ.", ignoreCase = true)) {
+        listOf(vertexUrl, aiStudioUrl)
+    } else {
+        listOf(aiStudioUrl, vertexUrl)
     }
 }

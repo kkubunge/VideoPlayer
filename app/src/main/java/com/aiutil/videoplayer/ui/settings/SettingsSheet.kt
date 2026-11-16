@@ -226,7 +226,7 @@ fun PlayerSettingsSheet(
                 onValueChange = { key -> onUpdate { it.copy(geminiApiKey = key) } },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Gemini API 키 (선택 - 무자막 음성 번역용)") },
-                placeholder = { Text("AIza...") },
+                placeholder = { Text("AQ.... 또는 AIza...") },
                 singleLine = true,
                 visualTransformation = if (showApiKey) {
                     VisualTransformation.None
