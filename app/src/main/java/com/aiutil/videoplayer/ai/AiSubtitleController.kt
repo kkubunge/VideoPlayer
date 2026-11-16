@@ -1,0 +1,269 @@
+package com.aiutil.videoplayer.ai
+
+import android.content.Context
+import com.aiutil.videoplayer.files.VideoScanner
+import com.aiutil.videoplayer.model.PlayerSettings
+import com.aiutil.videoplayer.model.SubtitleCue
+import com.aiutil.videoplayer.model.VideoItem
+import com.aiutil.videoplayer.util.SubtitleParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/**
+ * 동영상 자막 로딩, 실시간 AI 번역, 오디오 기반 자막 생성 및 SRT 내보내기를 조율한다.
+ */
+class AiSubtitleController(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val engine: TranslationEngine = TranslationEngine(),
+) {
+
+    private val _cues = MutableStateFlow<List<SubtitleCue>>(emptyList())
+    val cues: StateFlow<List<SubtitleCue>> = _cues.asStateFlow()
+
+    private val _activeCue = MutableStateFlow<SubtitleCue?>(null)
+    val activeCue: StateFlow<SubtitleCue?> = _activeCue.asStateFlow()
+
+    private val _statusText = MutableStateFlow("")
+    val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+    private val _loadedSubtitleName = MutableStateFlow<String?>(null)
+    val loadedSubtitleName: StateFlow<String?> = _loadedSubtitleName.asStateFlow()
+
+    private val _syncOffsetMs = MutableStateFlow(0L)
+    val syncOffsetMs: StateFlow<Long> = _syncOffsetMs.asStateFlow()
+
+    private val _liveEmbeddedText = MutableStateFlow("")
+    private val _liveEmbeddedTranslated = MutableStateFlow("")
+    val liveEmbeddedOriginal: StateFlow<String> = _liveEmbeddedText.asStateFlow()
+    val liveEmbeddedTranslated: StateFlow<String> = _liveEmbeddedTranslated.asStateFlow()
+
+    private var currentVideo: VideoItem? = null
+    private var translateJob: Job? = null
+    private var transcribeJob: Job? = null
+    private val transcribedWindowStarts = HashSet<Long>()
+    private var lastLiveTranslatedSource = ""
+
+    fun loadForVideo(video: VideoItem, settings: PlayerSettings) {
+        currentVideo = video
+        translateJob?.cancel()
+        transcribeJob?.cancel()
+        transcribedWindowStarts.clear()
+        _cues.value = emptyList()
+        _activeCue.value = null
+        _syncOffsetMs.value = 0L
+        _liveEmbeddedText.value = ""
+        _liveEmbeddedTranslated.value = ""
+        lastLiveTranslatedSource = ""
+
+        scope.launch(Dispatchers.IO) {
+            val companion = VideoScanner.findCompanionSubtitles(video.path).firstOrNull()
+            if (companion != null) {
+                loadSubtitleFile(companion, settings)
+            } else {
+                _loadedSubtitleName.value = null
+                _statusText.value = if (settings.aiTranslateEnabled) {
+                    if (settings.geminiApiKey.isNotBlank()) {
+                        "자막 없음 · Gemini AI 오디오 실시간 번역 대기"
+                    } else {
+                        "자막 파일 없음 · 자막 열기 또는 Gemini 키 설정 가능"
+                    }
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    suspend fun loadSubtitleFile(file: File, settings: PlayerSettings) {
+        val parsed = withContext(Dispatchers.IO) {
+            runCatching {
+                SubtitleParser.parseAuto(file.readText(Charsets.UTF_8), file.extension)
+            }.getOrDefault(emptyList())
+        }
+        _cues.value = parsed
+        _loadedSubtitleName.value = file.name
+        _statusText.value = if (parsed.isEmpty()) {
+            "자막 파일을 읽을 수 없습니다."
+        } else {
+            "자막 로드됨 (${parsed.size}줄)"
+        }
+        if (parsed.isNotEmpty() && settings.aiTranslateEnabled) {
+            pretranslateAround(0L, settings)
+        }
+    }
+
+    fun adjustSync(deltaMs: Long) {
+        _syncOffsetMs.value += deltaMs
+    }
+
+    fun resetSync() {
+        _syncOffsetMs.value = 0L
+    }
+
+    /** ExoPlayer 내장 자막(MKV/MP4 내부 트랙 등)이 들어올 때 호출된다. */
+    fun onEmbeddedCueText(rawText: String, settings: PlayerSettings) {
+        val clean = rawText.trim()
+        if (clean == _liveEmbeddedText.value) return
+        _liveEmbeddedText.value = clean
+        if (clean.isEmpty()) {
+            _liveEmbeddedTranslated.value = ""
+            return
+        }
+        if (!settings.aiTranslateEnabled) {
+            _liveEmbeddedTranslated.value = ""
+            return
+        }
+        if (clean == lastLiveTranslatedSource) return
+        lastLiveTranslatedSource = clean
+        scope.launch {
+            val tr = engine.translateText(
+                text = clean,
+                targetLangCode = settings.targetLangCode,
+                mode = settings.translationEngine,
+                geminiApiKey = settings.geminiApiKey,
+            )
+            if (_liveEmbeddedText.value == clean) {
+                _liveEmbeddedTranslated.value = tr
+            }
+        }
+    }
+
+    fun onPlaybackPosition(positionMs: Long, isPlaying: Boolean, settings: PlayerSettings) {
+        val list = _cues.value
+        if (list.isNotEmpty()) {
+            val active = SubtitleParser.findActiveCue(list, positionMs, _syncOffsetMs.value)
+            _activeCue.value = active
+
+            if (settings.aiTranslateEnabled &&
+                active != null &&
+                active.translatedText.isNullOrBlank() &&
+                translateJob?.isActive != true
+            ) {
+                pretranslateAround(positionMs, settings)
+            }
+            return
+        }
+
+        _activeCue.value = null
+        // 자막 파일/트랙이 없고, AI 번역 + 오디오 전사가 켜져 있으며 Gemini 키가 있으면 오디오 청크 기반 AI 자막 생성
+        val video = currentVideo ?: return
+        if (isPlaying &&
+            settings.aiTranslateEnabled &&
+            settings.autoTranscribeNoSubtitle &&
+            settings.geminiApiKey.isNotBlank() &&
+            _liveEmbeddedText.value.isBlank()
+        ) {
+            maybeTranscribeWindow(video, positionMs, settings)
+        }
+    }
+
+    fun pretranslateAround(positionMs: Long, settings: PlayerSettings) {
+        if (!settings.aiTranslateEnabled) return
+        val currentList = _cues.value
+        if (currentList.isEmpty()) return
+
+        translateJob?.cancel()
+        translateJob = scope.launch {
+            _statusText.value = "AI 번역 중..."
+            val startIdx = currentList.indexOfFirst { it.endMs >= positionMs - 2_000L }
+                .coerceAtLeast(0)
+            val endIdx = (startIdx + 18).coerceAtMost(currentList.size)
+            val targets = (startIdx until endIdx).filter { currentList[it].translatedText.isNullOrBlank() }
+
+            if (targets.isNotEmpty()) {
+                val texts = targets.map { currentList[it].originalText }
+                val translated = engine.translateBatch(
+                    texts = texts,
+                    targetLangCode = settings.targetLangCode,
+                    mode = settings.translationEngine,
+                    geminiApiKey = settings.geminiApiKey,
+                )
+                val updated = _cues.value.toMutableList()
+                targets.forEachIndexed { i, cueIndex ->
+                    if (cueIndex < updated.size && i < translated.size) {
+                        updated[cueIndex] = updated[cueIndex].copy(translatedText = translated[i])
+                    }
+                }
+                _cues.value = updated
+                _activeCue.value = SubtitleParser.findActiveCue(updated, positionMs, _syncOffsetMs.value)
+            }
+            _statusText.value = "AI 번역 활성 (${settings.targetLangCode})"
+        }
+    }
+
+    private fun maybeTranscribeWindow(
+        video: VideoItem,
+        positionMs: Long,
+        settings: PlayerSettings,
+    ) {
+        val windowStart = (positionMs / 10_000L) * 10_000L
+        if (transcribedWindowStarts.contains(windowStart)) return
+        if (transcribeJob?.isActive == true) return
+
+        transcribedWindowStarts.add(windowStart)
+        transcribeJob = scope.launch {
+            _statusText.value = "AI 오디오 인식·번역 중..."
+            val wav = AudioChunkExtractor.extractWavChunk(
+                context = context,
+                uriString = video.uri,
+                filePath = video.path,
+                startMs = windowStart,
+                durationMs = 10_000L,
+            )
+            if (wav == null) {
+                _statusText.value = "오디오 추출 불가"
+                return@launch
+            }
+            val segments = engine.transcribeAndTranslateAudio(
+                wavBytes = wav,
+                targetLangCode = settings.targetLangCode,
+                geminiApiKey = settings.geminiApiKey,
+            )
+            if (segments.isNotEmpty()) {
+                val baseIdx = _cues.value.size + 1
+                val newCues = segments.mapIndexed { idx, seg ->
+                    SubtitleCue(
+                        index = baseIdx + idx,
+                        startMs = windowStart + seg.startOffsetMs,
+                        endMs = windowStart + seg.endOffsetMs,
+                        originalText = seg.originalText,
+                        translatedText = seg.translatedText,
+                    )
+                }
+                _cues.value = (_cues.value + newCues).sortedBy { it.startMs }
+                _statusText.value = "AI 음성 자막 생성됨"
+            } else {
+                _statusText.value = "AI 번역 대기 중"
+            }
+        }
+    }
+
+    suspend fun exportTranslatedSrt(targetLangCode: String): Result<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            val video = currentVideo ?: error("재생 중인 동영상이 없습니다.")
+            val list = _cues.value
+            require(list.isNotEmpty()) { "저장할 자막 데이터가 없습니다." }
+            val videoFile = File(video.path)
+            val dir = videoFile.parentFile ?: context.getExternalFilesDir(null)
+                ?: error("저장할 폴더를 찾을 수 없습니다.")
+            val baseName = videoFile.nameWithoutExtension.ifBlank { "subtitle" }
+            val outFile = File(dir, "$baseName.$targetLangCode.srt")
+            outFile.writeText(SubtitleParser.toSrt(list, useTranslated = true), Charsets.UTF_8)
+            outFile
+        }
+    }
+
+    fun release() {
+        translateJob?.cancel()
+        transcribeJob?.cancel()
+        engine.close()
+    }
+}
