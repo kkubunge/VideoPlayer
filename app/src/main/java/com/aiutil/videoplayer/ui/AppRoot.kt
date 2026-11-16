@@ -16,6 +16,7 @@ import com.aiutil.videoplayer.ui.settings.PlayerSettingsSheet
 data class ActivePlaybackSession(
     val video: VideoItem,
     val playlist: List<VideoItem>,
+    val startPositionMs: Long? = null,
 )
 
 @Composable
@@ -43,6 +44,7 @@ fun AppRoot(
         PlayerScreen(
             initialVideo = currentSession.video,
             initialPlaylist = currentSession.playlist,
+            initialSeekPositionMs = currentSession.startPositionMs,
             isInPipMode = isInPipMode,
             onOpenSettings = { showSettingsSheet = true },
             onDeletedVideo = { refreshSignal++ },
@@ -58,8 +60,12 @@ fun AppRoot(
             refreshSignal = refreshSignal,
             onRequestReadPermission = onRequestReadPermission,
             onRequestAllFilesAccess = onRequestAllFilesAccess,
-            onPlayVideo = { video, playlist ->
-                activeSession = ActivePlaybackSession(video = video, playlist = playlist)
+            onPlayVideo = { video, playlist, startPosMs ->
+                activeSession = ActivePlaybackSession(
+                    video = video,
+                    playlist = playlist,
+                    startPositionMs = startPosMs,
+                )
             },
             onOpenSettings = { showSettingsSheet = true },
         )

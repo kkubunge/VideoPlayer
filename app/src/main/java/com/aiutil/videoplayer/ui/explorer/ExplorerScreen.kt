@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Close
@@ -44,6 +45,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -79,6 +82,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,9 +93,12 @@ import com.aiutil.videoplayer.files.VideoScanner
 import com.aiutil.videoplayer.model.ClipboardOp
 import com.aiutil.videoplayer.model.ExplorerEntry
 import com.aiutil.videoplayer.model.ExplorerTab
+import com.aiutil.videoplayer.model.FavoriteFolderItem
+import com.aiutil.videoplayer.model.FavoriteVideoItem
 import com.aiutil.videoplayer.model.FileClipboard
 import com.aiutil.videoplayer.model.PlaybackHistoryItem
 import com.aiutil.videoplayer.model.SortOrder
+import com.aiutil.videoplayer.model.VideoBookmarkItem
 import com.aiutil.videoplayer.model.VideoFolder
 import com.aiutil.videoplayer.model.VideoItem
 import com.aiutil.videoplayer.ui.components.VideoThumbnail
@@ -109,13 +116,28 @@ fun ExplorerScreen(
     refreshSignal: Int,
     onRequestReadPermission: () -> Unit,
     onRequestAllFilesAccess: () -> Unit,
-    onPlayVideo: (VideoItem, List<VideoItem>) -> Unit,
+    onPlayVideo: (VideoItem, List<VideoItem>, Long?) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings by App.settings.settings.collectAsState()
     val historyItems by App.history.items.collectAsState()
+    val favoriteVideos by App.bookmarks.favoriteVideos.collectAsState()
+    val favoriteFolders by App.bookmarks.favoriteFolders.collectAsState()
+    val videoBookmarks by App.bookmarks.videoBookmarks.collectAsState()
+
+    val favoriteVideoIds = remember(favoriteVideos) {
+        buildSet {
+            favoriteVideos.forEach {
+                add(it.id)
+                if (it.path.isNotBlank()) add(it.path)
+            }
+        }
+    }
+    val favoriteFolderPaths = remember(favoriteFolders) {
+        favoriteFolders.map { it.path }.toSet()
+    }
 
     var selectedTab by remember { mutableStateOf(ExplorerTab.FOLDERS) }
     var searchVisible by remember { mutableStateOf(false) }
@@ -506,7 +528,14 @@ fun ExplorerScreen(
                             selectedTab = tab
                             selectedPaths = emptySet()
                         },
-                        text = { Text(tab.label) },
+                        text = {
+                            Text(
+                                text = tab.label,
+                                maxLines = 1,
+                                softWrap = false,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        },
                     )
                 }
             }
@@ -536,14 +565,23 @@ fun ExplorerScreen(
                                 historyItems = historyItems,
                                 selectedPaths = selectedPaths,
                                 subtitleBaseNames = folderSubtitleBases,
+                                favoriteVideoIds = favoriteVideoIds,
                                 onVideoClick = { video ->
                                     if (selectedPaths.isNotEmpty()) {
                                         toggleSelect(video.path)
                                     } else {
-                                        onPlayVideo(video, activeVideoFolder.videos)
+                                        onPlayVideo(video, activeVideoFolder.videos, null)
                                     }
                                 },
                                 onVideoLongClick = { video -> toggleSelect(video.path) },
+                                onToggleFavorite = { v ->
+                                    val added = App.bookmarks.toggleFavoriteVideo(v)
+                                    Toast.makeText(
+                                        context,
+                                        if (added) "즐겨찾기에 추가됨" else "즐겨찾기에서 해제됨",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
                                 onCopy = { v -> startClipboard(ClipboardOp.COPY, listOf(v.path)) },
                                 onMove = { v -> startClipboard(ClipboardOp.MOVE, listOf(v.path)) },
                                 onRename = { v ->
@@ -559,6 +597,7 @@ fun ExplorerScreen(
                                                 context = context,
                                                 fallbackUris = listOf(v.uri),
                                             )
+                                            App.bookmarks.removeForDeletedPath(v.id)
                                             triggerRefresh()
                                         }
                                     }
@@ -568,6 +607,7 @@ fun ExplorerScreen(
                             FolderListContent(
                                 folders = folders,
                                 selectedPaths = selectedPaths,
+                                favoriteFolderPaths = favoriteFolderPaths,
                                 onFolderClick = { folder ->
                                     if (selectedPaths.isNotEmpty()) {
                                         toggleSelect(folder.path)
@@ -576,6 +616,14 @@ fun ExplorerScreen(
                                     }
                                 },
                                 onFolderLongClick = { folder -> toggleSelect(folder.path) },
+                                onToggleFavorite = { folder ->
+                                    val added = App.bookmarks.toggleFavoriteFolder(folder.path, folder.name)
+                                    Toast.makeText(
+                                        context,
+                                        if (added) "즐겨찾는 폴더에 추가됨" else "즐겨찾는 폴더에서 해제됨",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
                                 onOpenInExplorer = { folder ->
                                     if (File(folder.path).isDirectory) {
                                         currentDirPath = folder.path
@@ -597,6 +645,8 @@ fun ExplorerScreen(
                             entries = filteredEntries,
                             isLoading = isLoadingDirectory,
                             selectedPaths = selectedPaths,
+                            favoriteFolderPaths = favoriteFolderPaths,
+                            favoriteVideoIds = favoriteVideoIds,
                             onNavigateDir = { newPath ->
                                 currentDirPath = newPath
                                 selectedPaths = emptySet()
@@ -610,7 +660,7 @@ fun ExplorerScreen(
                                     val folderPlaylist = filteredEntries
                                         .mapNotNull { it.videoItem }
                                         .ifEmpty { listOf(entry.videoItem) }
-                                    onPlayVideo(entry.videoItem, folderPlaylist)
+                                    onPlayVideo(entry.videoItem, folderPlaylist, null)
                                 } else {
                                     Toast.makeText(
                                         context,
@@ -620,10 +670,86 @@ fun ExplorerScreen(
                                 }
                             },
                             onEntryLongClick = { entry -> toggleSelect(entry.path) },
+                            onToggleFavorite = { entry ->
+                                if (entry.isDirectory) {
+                                    val added = App.bookmarks.toggleFavoriteFolder(entry.path, entry.name)
+                                    Toast.makeText(
+                                        context,
+                                        if (added) "즐겨찾는 폴더에 추가됨" else "즐겨찾는 폴더에서 해제됨",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else if (entry.isVideo && entry.videoItem != null) {
+                                    val added = App.bookmarks.toggleFavoriteVideo(entry.videoItem)
+                                    Toast.makeText(
+                                        context,
+                                        if (added) "즐겨찾기에 추가됨" else "즐겨찾기에서 해제됨",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            },
                             onCopy = { entry -> startClipboard(ClipboardOp.COPY, listOf(entry.path)) },
                             onMove = { entry -> startClipboard(ClipboardOp.MOVE, listOf(entry.path)) },
                             onRename = { entry -> renameTargetPath = entry.path },
                             onDelete = { entry -> deleteTargets = listOf(entry.path) },
+                        )
+                    }
+
+                    ExplorerTab.FAVORITES -> {
+                        FavoritesContent(
+                            favoriteFolders = favoriteFolders,
+                            favoriteVideos = favoriteVideos,
+                            videoBookmarks = videoBookmarks,
+                            allVideos = allVideos,
+                            onOpenFolder = { favFolder ->
+                                if (folders.any { it.path == favFolder.path }) {
+                                    openedVideoFolderPath = favFolder.path
+                                    selectedTab = ExplorerTab.FOLDERS
+                                } else if (File(favFolder.path).isDirectory) {
+                                    currentDirPath = favFolder.path
+                                    selectedTab = ExplorerTab.FILES
+                                } else {
+                                    Toast.makeText(context, "폴더를 찾을 수 없습니다.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onRemoveFavoriteFolder = { App.bookmarks.removeFavoriteFolder(it.path) },
+                            onPlayFavoriteVideo = { favVideo ->
+                                val matched = allVideos.firstOrNull {
+                                    it.id == favVideo.id || (favVideo.path.isNotBlank() && it.path == favVideo.path)
+                                } ?: VideoItem(
+                                    id = favVideo.id,
+                                    title = favVideo.title,
+                                    uri = favVideo.uri,
+                                    path = favVideo.path,
+                                    folderPath = favVideo.folderPath,
+                                    folderName = favVideo.folderName,
+                                    sizeBytes = favVideo.sizeBytes,
+                                    durationMs = favVideo.durationMs,
+                                    dateModifiedSec = favVideo.addedAtMs / 1000L,
+                                )
+                                val playlist = allVideos.filter { it.folderPath == matched.folderPath }
+                                    .ifEmpty { listOf(matched) }
+                                onPlayVideo(matched, playlist, null)
+                            },
+                            onRemoveFavoriteVideo = { App.bookmarks.removeFavoriteVideo(it.id) },
+                            onPlayBookmark = { bm ->
+                                val matched = allVideos.firstOrNull {
+                                    it.id == bm.videoId || (bm.path.isNotBlank() && it.path == bm.path)
+                                } ?: VideoItem(
+                                    id = bm.videoId,
+                                    title = bm.videoTitle,
+                                    uri = bm.uri,
+                                    path = bm.path,
+                                    folderPath = bm.folderPath,
+                                    folderName = File(bm.folderPath).name.ifBlank { "북마크" },
+                                    sizeBytes = 0L,
+                                    durationMs = 0L,
+                                    dateModifiedSec = bm.createdAtMs / 1000L,
+                                )
+                                val playlist = allVideos.filter { it.folderPath == matched.folderPath }
+                                    .ifEmpty { listOf(matched) }
+                                onPlayVideo(matched, playlist, bm.positionMs)
+                            },
+                            onRemoveBookmark = { App.bookmarks.removeVideoBookmark(it.bookmarkId) },
                         )
                     }
 
@@ -647,7 +773,7 @@ fun ExplorerScreen(
                                 )
                                 val playlist = allVideos.filter { it.folderPath == matched.folderPath }
                                     .ifEmpty { listOf(matched) }
-                                onPlayVideo(matched, playlist)
+                                onPlayVideo(matched, playlist, null)
                             },
                             onRemoveItem = { App.history.removeByPathOrId(it.id) },
                             onClearAll = { App.history.clearAll() },
@@ -727,7 +853,10 @@ fun ExplorerScreen(
                                 )
                             }
                             res.onSuccess { count ->
-                                targets.forEach { App.history.removeByPathOrId(it) }
+                                targets.forEach {
+                                    App.history.removeByPathOrId(it)
+                                    App.bookmarks.removeForDeletedPath(it)
+                                }
                                 Toast.makeText(context, "${count}개 항목 삭제됨", Toast.LENGTH_SHORT).show()
                                 triggerRefresh()
                             }.onFailure {
@@ -776,8 +905,10 @@ private fun PermissionCard(
 private fun FolderListContent(
     folders: List<VideoFolder>,
     selectedPaths: Set<String>,
+    favoriteFolderPaths: Set<String>,
     onFolderClick: (VideoFolder) -> Unit,
     onFolderLongClick: (VideoFolder) -> Unit,
+    onToggleFavorite: (VideoFolder) -> Unit,
     onOpenInExplorer: (VideoFolder) -> Unit,
     onCopy: (VideoFolder) -> Unit,
     onMove: (VideoFolder) -> Unit,
@@ -797,6 +928,7 @@ private fun FolderListContent(
     ) {
         items(folders, key = { it.path }) { folder ->
             val isSelected = selectedPaths.contains(folder.path)
+            val isFav = favoriteFolderPaths.contains(folder.path)
             var menuExpanded by remember { mutableStateOf(false) }
 
             Card(
@@ -836,12 +968,26 @@ private fun FolderListContent(
                     )
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = folder.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = folder.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (isFav) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "즐겨찾기됨",
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                         Text(
                             text = "동영상 ${folder.videos.size}개 · ${Format.size(folder.totalSizeBytes)}",
                             style = MaterialTheme.typography.bodySmall,
@@ -863,6 +1009,17 @@ private fun FolderListContent(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },
                         ) {
+                            DropdownMenuItem(
+                                text = { Text(if (isFav) "즐겨찾기 해제" else "즐겨찾기 추가") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (isFav) Icons.Default.Star else Icons.Default.StarBorder,
+                                        null,
+                                        tint = if (isFav) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                },
+                                onClick = { menuExpanded = false; onToggleFavorite(folder) },
+                            )
                             DropdownMenuItem(
                                 text = { Text("탐색기에서 열기") },
                                 onClick = { menuExpanded = false; onOpenInExplorer(folder) },
@@ -904,8 +1061,10 @@ private fun VideoListContent(
     historyItems: List<PlaybackHistoryItem>,
     selectedPaths: Set<String>,
     subtitleBaseNames: Set<String>,
+    favoriteVideoIds: Set<String>,
     onVideoClick: (VideoItem) -> Unit,
     onVideoLongClick: (VideoItem) -> Unit,
+    onToggleFavorite: (VideoItem) -> Unit,
     onCopy: (VideoItem) -> Unit,
     onMove: (VideoItem) -> Unit,
     onRename: (VideoItem) -> Unit,
@@ -920,6 +1079,8 @@ private fun VideoListContent(
     ) {
         items(videos, key = { it.id }) { video ->
             val isSelected = video.path.isNotBlank() && selectedPaths.contains(video.path)
+            val isFav = favoriteVideoIds.contains(video.id) ||
+                (video.path.isNotBlank() && favoriteVideoIds.contains(video.path))
             val hist = historyMap[video.id] ?: historyMap[video.path]
             val hasSubtitle = remember(video.path, subtitleBaseNames) {
                 if (video.path.isBlank()) {
@@ -990,13 +1151,27 @@ private fun VideoListContent(
                     Spacer(Modifier.width(12.dp))
 
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(
-                            text = video.title,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = video.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (isFav) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "즐겨찾기됨",
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(15.dp),
+                                )
+                            }
+                        }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1047,6 +1222,17 @@ private fun VideoListContent(
                                 leadingIcon = { Icon(Icons.Default.PlayArrow, null) },
                                 onClick = { menuExpanded = false; onVideoClick(video) },
                             )
+                            DropdownMenuItem(
+                                text = { Text(if (isFav) "즐겨찾기 해제" else "즐겨찾기 추가") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (isFav) Icons.Default.Star else Icons.Default.StarBorder,
+                                        null,
+                                        tint = if (isFav) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                },
+                                onClick = { menuExpanded = false; onToggleFavorite(video) },
+                            )
                             if (video.path.isNotBlank()) {
                                 DropdownMenuItem(
                                     text = { Text("복사") },
@@ -1087,9 +1273,12 @@ private fun FileExplorerContent(
     entries: List<ExplorerEntry>,
     isLoading: Boolean,
     selectedPaths: Set<String>,
+    favoriteFolderPaths: Set<String>,
+    favoriteVideoIds: Set<String>,
     onNavigateDir: (String) -> Unit,
     onEntryClick: (ExplorerEntry) -> Unit,
     onEntryLongClick: (ExplorerEntry) -> Unit,
+    onToggleFavorite: (ExplorerEntry) -> Unit,
     onCopy: (ExplorerEntry) -> Unit,
     onMove: (ExplorerEntry) -> Unit,
     onRename: (ExplorerEntry) -> Unit,
@@ -1166,6 +1355,8 @@ private fun FileExplorerContent(
         ) {
             items(entries, key = { it.path }) { entry ->
                 val isSelected = selectedPaths.contains(entry.path)
+                val isFav = (entry.isDirectory && favoriteFolderPaths.contains(entry.path)) ||
+                    (entry.isVideo && favoriteVideoIds.contains(entry.path))
                 var menuExpanded by remember { mutableStateOf(false) }
 
                 Card(
@@ -1236,12 +1427,26 @@ private fun FileExplorerContent(
                         Spacer(Modifier.width(12.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = entry.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = entry.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (isFav) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = "즐겨찾기됨",
+                                        tint = Color(0xFFFFB300),
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                }
+                            }
                             val subInfo = if (entry.isDirectory) {
                                 if (entry.childCount >= 0) "항목 ${entry.childCount}개" else "폴더"
                             } else {
@@ -1270,6 +1475,17 @@ private fun FileExplorerContent(
                                         text = { Text(if (entry.isDirectory) "열기" else "재생") },
                                         onClick = { menuExpanded = false; onEntryClick(entry) },
                                     )
+                                    DropdownMenuItem(
+                                        text = { Text(if (isFav) "즐겨찾기 해제" else "즐겨찾기 추가") },
+                                        leadingIcon = {
+                                            Icon(
+                                                if (isFav) Icons.Default.Star else Icons.Default.StarBorder,
+                                                null,
+                                                tint = if (isFav) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface,
+                                            )
+                                        },
+                                        onClick = { menuExpanded = false; onToggleFavorite(entry) },
+                                    )
                                 }
                                 DropdownMenuItem(
                                     text = { Text("복사") },
@@ -1294,6 +1510,273 @@ private fun FileExplorerContent(
                                     onClick = { menuExpanded = false; onDelete(entry) },
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoritesContent(
+    favoriteFolders: List<FavoriteFolderItem>,
+    favoriteVideos: List<FavoriteVideoItem>,
+    videoBookmarks: List<VideoBookmarkItem>,
+    allVideos: List<VideoItem>,
+    onOpenFolder: (FavoriteFolderItem) -> Unit,
+    onRemoveFavoriteFolder: (FavoriteFolderItem) -> Unit,
+    onPlayFavoriteVideo: (FavoriteVideoItem) -> Unit,
+    onRemoveFavoriteVideo: (FavoriteVideoItem) -> Unit,
+    onPlayBookmark: (VideoBookmarkItem) -> Unit,
+    onRemoveBookmark: (VideoBookmarkItem) -> Unit,
+) {
+    if (favoriteFolders.isEmpty() && favoriteVideos.isEmpty() && videoBookmarks.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.StarBorder,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "즐겨찾기한 폴더·동영상이나 장면 북마크가 없습니다.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "목록의 ⋮ 메뉴 또는 재생 화면 상단 북마크 버튼으로 추가해 보세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (favoriteFolders.isNotEmpty()) {
+            item {
+                Text(
+                    text = "즐겨찾는 폴더 (${favoriteFolders.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            items(favoriteFolders, key = { "fav_folder_${it.path}" }) { folder ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenFolder(folder) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(34.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = folder.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = folder.path,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        IconButton(onClick = { onRemoveFavoriteFolder(folder) }) {
+                            Icon(
+                                Icons.Default.Star,
+                                contentDescription = "즐겨찾기 해제",
+                                tint = Color(0xFFFFB300),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (favoriteVideos.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "즐겨찾는 동영상 (${favoriteVideos.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            items(favoriteVideos, key = { "fav_video_${it.id}" }) { fav ->
+                val matchedVideo = allVideos.firstOrNull {
+                    it.id == fav.id || (fav.path.isNotBlank() && it.path == fav.path)
+                }
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPlayFavoriteVideo(fav) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        VideoThumbnail(
+                            uri = matchedVideo?.uri ?: fav.uri,
+                            path = fav.path,
+                            modifier = Modifier
+                                .size(width = 96.dp, height = 56.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = fav.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val meta = buildString {
+                                if (fav.folderName.isNotBlank()) append(fav.folderName)
+                                if (fav.durationMs > 0L) {
+                                    if (isNotEmpty()) append(" · ")
+                                    append(Format.duration(fav.durationMs))
+                                }
+                            }
+                            if (meta.isNotBlank()) {
+                                Text(
+                                    text = meta,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { onRemoveFavoriteVideo(fav) }) {
+                            Icon(
+                                Icons.Default.Star,
+                                contentDescription = "즐겨찾기 해제",
+                                tint = Color(0xFFFFB300),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (videoBookmarks.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "장면 북마크 (${videoBookmarks.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            items(videoBookmarks, key = { "bm_${it.bookmarkId}" }) { bm ->
+                val matchedVideo = allVideos.firstOrNull {
+                    it.id == bm.videoId || (bm.path.isNotBlank() && it.path == bm.path)
+                }
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPlayBookmark(bm) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 96.dp, height = 56.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                        ) {
+                            VideoThumbnail(
+                                uri = matchedVideo?.uri ?: bm.uri,
+                                path = bm.path,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            Text(
+                                text = Format.duration(bm.positionMs),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(4.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                        RoundedCornerShape(4.dp),
+                                    )
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = bm.videoTitle,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bookmark,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = if (bm.note.isNotBlank()) {
+                                        "${Format.duration(bm.positionMs)} · ${bm.note}"
+                                    } else {
+                                        "${Format.duration(bm.positionMs)} 지점"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { onRemoveBookmark(bm) }) {
+                            Icon(Icons.Default.Close, contentDescription = "북마크 삭제")
                         }
                     }
                 }

@@ -39,6 +39,7 @@ enum class SortOrder(val label: String) {
 enum class ExplorerTab(val label: String) {
     FOLDERS("동영상 폴더"),
     FILES("파일 탐색기"),
+    FAVORITES("즐겨찾기"),
     RECENT("최근 재생"),
 }
 
@@ -132,6 +133,39 @@ data class PlaybackHistoryItem(
     val positionMs: Long,
     val durationMs: Long,
     val lastPlayedAtMs: Long,
+)
+
+@Serializable
+data class FavoriteVideoItem(
+    val id: String,
+    val title: String,
+    val uri: String,
+    val path: String,
+    val folderPath: String,
+    val folderName: String,
+    val durationMs: Long = 0L,
+    val sizeBytes: Long = 0L,
+    val addedAtMs: Long = System.currentTimeMillis(),
+)
+
+@Serializable
+data class FavoriteFolderItem(
+    val path: String,
+    val name: String,
+    val addedAtMs: Long = System.currentTimeMillis(),
+)
+
+@Serializable
+data class VideoBookmarkItem(
+    val bookmarkId: String,
+    val videoId: String,
+    val videoTitle: String,
+    val uri: String,
+    val path: String,
+    val folderPath: String,
+    val positionMs: Long,
+    val note: String = "",
+    val createdAtMs: Long = System.currentTimeMillis(),
 )
 
 object SupportedLanguages {

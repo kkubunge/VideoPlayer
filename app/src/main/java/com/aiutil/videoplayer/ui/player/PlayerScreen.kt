@@ -46,7 +46,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.BrightnessHigh
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -63,10 +66,13 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -78,6 +84,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -185,6 +192,7 @@ private data class DoubleTapFeedback(
 fun PlayerScreen(
     initialVideo: VideoItem,
     initialPlaylist: List<VideoItem>,
+    initialSeekPositionMs: Long? = null,
     isInPipMode: Boolean,
     onOpenSettings: () -> Unit,
     onDeletedVideo: (String) -> Unit,
@@ -270,6 +278,20 @@ fun PlayerScreen(
     var showSleepDialog by remember { mutableStateOf(false) }
     var showSubtitleFileDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showBookmarkSheet by remember { mutableStateOf(false) }
+    var pendingInitialSeek by remember(initialVideo, initialSeekPositionMs) {
+        mutableStateOf(initialSeekPositionMs)
+    }
+
+    // 즐겨찾기 및 북마크 상태
+    val favoriteVideos by App.bookmarks.favoriteVideos.collectAsState()
+    val allBookmarks by App.bookmarks.videoBookmarks.collectAsState()
+    val isCurrentFavorite = remember(favoriteVideos, currentVideo) {
+        App.bookmarks.isFavoriteVideo(currentVideo.id, currentVideo.path)
+    }
+    val currentVideoBookmarks = remember(allBookmarks, currentVideo) {
+        App.bookmarks.bookmarksForVideo(currentVideo.id, currentVideo.path)
+    }
 
     // AI 자막 상태 수집
     val activeCue by subtitleController.activeCue.collectAsState()
@@ -459,7 +481,16 @@ fun PlayerScreen(
         }
         exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
         exoPlayer.prepare()
-        if (latestSettings.resumePlayback) {
+        val bookmarkTarget = pendingInitialSeek
+        if (bookmarkTarget != null && bookmarkTarget > 0L) {
+            pendingInitialSeek = null
+            exoPlayer.seekTo(bookmarkTarget)
+            Toast.makeText(
+                context,
+                "북마크 위치 (${Format.duration(bookmarkTarget)})",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else if (latestSettings.resumePlayback) {
             val savedPos = App.history.getSavedPosition(currentVideo.id)
             if (savedPos > 1_500L) {
                 exoPlayer.seekTo(savedPos)
@@ -1180,6 +1211,27 @@ fun PlayerScreen(
                         )
                     }
 
+                    // 즐겨찾기 & 장면 북마크 버튼
+                    IconButton(
+                        onClick = { showBookmarkSheet = true },
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (isCurrentFavorite || currentVideoBookmarks.isNotEmpty()) {
+                                Icons.Default.Bookmark
+                            } else {
+                                Icons.Default.BookmarkAdd
+                            },
+                            contentDescription = "즐겨찾기 및 북마크",
+                            tint = if (isCurrentFavorite || currentVideoBookmarks.isNotEmpty()) {
+                                Color(0xFFFFCA28)
+                            } else {
+                                Color.White
+                            },
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+
                     // AI 번역 버튼
                     IconButton(
                         onClick = { showAiSheet = true },
@@ -1502,6 +1554,7 @@ fun PlayerScreen(
                             }
                             res.onSuccess {
                                 App.history.removeByPathOrId(targetToDelete.id)
+                                App.bookmarks.removeForDeletedPath(targetToDelete.id)
                                 onDeletedVideo(targetToDelete.id)
                                 Toast.makeText(context, "동영상을 삭제했습니다.", Toast.LENGTH_SHORT).show()
                                 val updatedList = playlist.filterNot { it.id == targetToDelete.id }
@@ -1834,6 +1887,155 @@ fun PlayerScreen(
                 TextButton(onClick = { showSleepDialog = false }) { Text("닫기") }
             },
         )
+    }
+
+    // 즐겨찾기 & 장면 북마크 바텀 시트
+    if (showBookmarkSheet) {
+        var bookmarkNote by remember { mutableStateOf("") }
+        ModalBottomSheet(
+            onDismissRequest = { showBookmarkSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "즐겨찾기 & 장면 북마크",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    FilterChip(
+                        selected = isCurrentFavorite,
+                        onClick = {
+                            val added = App.bookmarks.toggleFavoriteVideo(currentVideo)
+                            Toast.makeText(
+                                context,
+                                if (added) "즐겨찾는 동영상에 추가됨" else "즐겨찾기 해제됨",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (isCurrentFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = null,
+                                tint = if (isCurrentFavorite) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        label = { Text(if (isCurrentFavorite) "즐겨찾기됨" else "즐겨찾기") },
+                    )
+                }
+
+                HorizontalDivider()
+
+                val capturePosMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                OutlinedTextField(
+                    value = bookmarkNote,
+                    onValueChange = { bookmarkNote = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("북마크 메모 (선택)") },
+                    placeholder = { Text("예: 주요 장면, 다시 볼 구간") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = {
+                        val targetPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+                        App.bookmarks.addVideoBookmark(
+                            video = currentVideo,
+                            positionMs = targetPos,
+                            note = bookmarkNote,
+                        )
+                        bookmarkNote = ""
+                        Toast.makeText(
+                            context,
+                            "${Format.duration(targetPos)} 장면 북마크 저장됨",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.BookmarkAdd, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("현재 위치 북마크 추가 (${Format.duration(capturePosMs)})")
+                }
+
+                Text(
+                    text = "이 영상의 북마크 (${currentVideoBookmarks.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                if (currentVideoBookmarks.isEmpty()) {
+                    Text(
+                        text = "저장된 장면 북마크가 없습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    currentVideoBookmarks.forEach { bm ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    exoPlayer.seekTo(bm.positionMs)
+                                    positionMs = bm.positionMs
+                                    showBookmarkSheet = false
+                                },
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bookmark,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = Format.duration(bm.positionMs),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = bm.note.ifBlank { "저장된 장면" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(
+                                    onClick = { App.bookmarks.removeVideoBookmark(bm.bookmarkId) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "북마크 삭제",
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
+        }
     }
 }
 
