@@ -103,6 +103,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -176,6 +177,7 @@ private data class DoubleTapFeedback(
 )
 
 @OptIn(UnstableApi::class)
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     initialVideo: VideoItem,
@@ -868,7 +870,7 @@ fun PlayerScreen(
                                             lastSingleTapJobPending = true
                                             pendingTapTime = SystemClock.uptimeMillis()
                                             pendingTapX = startX
-                                            val nextEvent = withTimeoutOrNull(
+                                            val nextEvent = withTimeoutOrNull<PointerEvent>(
                                                 viewConfig.doubleTapTimeoutMillis
                                             ) {
                                                 while (true) {
