@@ -248,6 +248,8 @@ fun PlayerScreen(
     var videoFps by remember { mutableFloatStateOf(settings.defaultFps) }
     var isScrubbingBar by remember { mutableStateOf(false) }
     var scrubBarPositionMs by remember { mutableLongStateOf(0L) }
+    var wasPlayingBeforeBarScrub by remember { mutableStateOf(false) }
+    var lastBarSeekAt by remember { mutableLongStateOf(0L) }
 
     // UI 및 제어 상태
     var controlsVisible by remember { mutableStateOf(true) }
@@ -530,9 +532,12 @@ fun PlayerScreen(
         settings.targetLangCode,
         settings.translationEngine,
         settings.geminiApiKey,
+        settings.autoTranscribeNoSubtitle,
     ) {
         if (settings.aiTranslateEnabled) {
-            subtitleController.pretranslateAround(exoPlayer.currentPosition, settings)
+            val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            subtitleController.pretranslateAround(curPos, settings)
+            subtitleController.onPlaybackPosition(curPos, true, settings)
         }
     }
 
@@ -722,6 +727,7 @@ fun PlayerScreen(
                                 var longPressAnchorX = startX
                                 var lastSeekApplyAt = 0L
                                 var pendingSeekTarget = startSeekPos
+                                var wasPlayingBeforeSeek = false
                                 var gestureEndedCleanly = false
 
                                 var zoomStartScale = latestZoomScale
@@ -768,6 +774,15 @@ fun PlayerScreen(
                                         val centerX = (p0.x + p1.x) * 0.5f
 
                                         if (mode != ActiveDragMode.TWO_FINGER_ZOOM) {
+                                            if (mode == ActiveDragMode.SEEK) {
+                                                // 탐색 중 두 손가락 줌으로 전환될 때 탐색 상태 복원
+                                                exoPlayer.setSeekParameters(SeekParameters.EXACT)
+                                                isScrubbingBar = false
+                                                if (wasPlayingBeforeSeek) {
+                                                    exoPlayer.play()
+                                                    wasPlayingBeforeSeek = false
+                                                }
+                                            }
                                             lastSingleTapJobPending = false
                                             mode = ActiveDragMode.TWO_FINGER_ZOOM
                                             zoomStartScale = latestZoomScale
@@ -829,6 +844,12 @@ fun PlayerScreen(
                                             }
                                             if (mode == ActiveDragMode.SEEK) {
                                                 longPressAnchorX = curX
+                                                // 드래그 중 화면 프레임을 즉시 그려내기 위해 일시정지 + 고속 싱크 탐색 전환
+                                                wasPlayingBeforeSeek = exoPlayer.isPlaying
+                                                if (exoPlayer.isPlaying) exoPlayer.pause()
+                                                exoPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                                                isScrubbingBar = true
+                                                scrubBarPositionMs = startSeekPos
                                             }
                                         }
                                     }
@@ -878,6 +899,8 @@ fun PlayerScreen(
                                                 if (dur > 0L) dur else Long.MAX_VALUE
                                             )
                                             pendingSeekTarget = target
+                                            scrubBarPositionMs = target
+                                            positionMs = target
                                             val actualDelta = target - startSeekPos
                                             val deltaFrames = GestureMath.msToFrames(actualDelta, effectiveFps)
                                             val frameSign = if (deltaFrames >= 0) "+" else ""
@@ -894,9 +917,8 @@ fun PlayerScreen(
                                                 } else null,
                                             )
                                             val tNow = SystemClock.uptimeMillis()
-                                            if (tNow - lastSeekApplyAt >= 120L) {
+                                            if (tNow - lastSeekApplyAt >= 45L) {
                                                 exoPlayer.seekTo(target)
-                                                positionMs = target
                                                 lastSeekApplyAt = tNow
                                             }
                                             change.consume()
@@ -927,8 +949,18 @@ fun PlayerScreen(
                                 // 포인터 UP 이후 마무리 처리
                                 when (mode) {
                                     ActiveDragMode.SEEK -> {
+                                        exoPlayer.setSeekParameters(SeekParameters.EXACT)
                                         exoPlayer.seekTo(pendingSeekTarget)
                                         positionMs = pendingSeekTarget
+                                        isScrubbingBar = false
+                                        if (wasPlayingBeforeSeek) {
+                                            exoPlayer.play()
+                                        }
+                                        subtitleController.onPlaybackPosition(
+                                            pendingSeekTarget,
+                                            wasPlayingBeforeSeek,
+                                            latestSettings,
+                                        )
                                         hudState = null
                                     }
 
@@ -1092,6 +1124,28 @@ fun PlayerScreen(
                             color = Color(0xFFFFEB3B),
                         )
                     }
+                }
+            } else if (settings.aiTranslateEnabled &&
+                subtitleStatus.isNotBlank() &&
+                loadedSubName == null &&
+                !isInPipMode
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(
+                            horizontal = 20.dp,
+                            vertical = if (controlsVisible) 88.dp else 22.dp,
+                        ),
+                    color = Color.Black.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(
+                        text = subtitleStatus,
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
                 }
             }
         }
@@ -1479,13 +1533,35 @@ fun PlayerScreen(
                                 (shownPos.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
                             } else 0f,
                             onValueChange = { ratio ->
-                                isScrubbingBar = true
-                                scrubBarPositionMs = (ratio * durationMs).roundToLong()
+                                if (!isScrubbingBar) {
+                                    wasPlayingBeforeBarScrub = exoPlayer.isPlaying
+                                    if (exoPlayer.isPlaying) exoPlayer.pause()
+                                    exoPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                                    isScrubbingBar = true
+                                    lastBarSeekAt = 0L
+                                }
+                                val target = (ratio * durationMs).roundToLong()
+                                scrubBarPositionMs = target
+                                positionMs = target
+                                val now = SystemClock.uptimeMillis()
+                                if (now - lastBarSeekAt >= 45L) {
+                                    exoPlayer.seekTo(target)
+                                    lastBarSeekAt = now
+                                }
                             },
                             onValueChangeFinished = {
+                                exoPlayer.setSeekParameters(SeekParameters.EXACT)
                                 exoPlayer.seekTo(scrubBarPositionMs)
                                 positionMs = scrubBarPositionMs
                                 isScrubbingBar = false
+                                if (wasPlayingBeforeBarScrub) {
+                                    exoPlayer.play()
+                                }
+                                subtitleController.onPlaybackPosition(
+                                    scrubBarPositionMs,
+                                    wasPlayingBeforeBarScrub,
+                                    latestSettings,
+                                )
                             },
                             modifier = Modifier
                                 .weight(1f)

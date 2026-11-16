@@ -1,6 +1,7 @@
 package com.aiutil.videoplayer.ai
 
 import android.content.Context
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -55,7 +56,8 @@ object AudioChunkExtractor {
             extractor.selectTrack(audioTrackIndex)
             val startUs = startMs.coerceAtLeast(0L) * 1_000L
             val endUs = startUs + durationMs.coerceIn(2_000L, 15_000L) * 1_000L
-            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            // 구간 시작점 대사가 잘리지 않도록 직전 동기 프레임으로 이동
+            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
 
             var inputSampleRate = if (audioFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
                 audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
@@ -66,6 +68,11 @@ object AudioChunkExtractor {
                 audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             } else {
                 2
+            }
+            var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
+
+            runCatching {
+                audioFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
             }
 
             codec = MediaCodec.createDecoderByType(mime).apply {
@@ -120,6 +127,9 @@ object AudioChunkExtractor {
                         if (outFmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
                             channelCount = outFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                         }
+                        if (outFmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                            pcmEncoding = outFmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                        }
                     }
 
                     outIdx >= 0 -> {
@@ -132,6 +142,7 @@ object AudioChunkExtractor {
                                 byteCount = bufferInfo.size,
                                 sampleRate = inputSampleRate,
                                 channels = channelCount.coerceAtLeast(1),
+                                pcmEncoding = pcmEncoding,
                                 out = pcmMono16k,
                             )
                         }
@@ -160,23 +171,40 @@ object AudioChunkExtractor {
         byteCount: Int,
         sampleRate: Int,
         channels: Int,
+        pcmEncoding: Int,
         out: ByteArrayOutputStream,
     ) {
-        val sampleCountTotal = byteCount / (2 * channels)
-        if (sampleCountTotal <= 0) return
-
-        val shortBuf = pcmBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        val monoSamples = ShortArray(sampleCountTotal)
-        for (i in 0 until sampleCountTotal) {
-            var sum = 0
-            for (ch in 0 until channels) {
-                sum += shortBuf.get(i * channels + ch).toInt()
+        val ordered = pcmBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        val monoSamples: ShortArray = if (pcmEncoding == AudioFormat.ENCODING_PCM_FLOAT) {
+            val floatBuf = ordered.asFloatBuffer()
+            val sampleCountTotal = minOf(byteCount / (4 * channels), floatBuf.remaining() / channels)
+            if (sampleCountTotal <= 0) return
+            ShortArray(sampleCountTotal) { i ->
+                var sum = 0f
+                for (ch in 0 until channels) {
+                    sum += floatBuf.get(i * channels + ch)
+                }
+                val normalized = (sum / channels).coerceIn(-1f, 1f)
+                (normalized * 32767f).roundToInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    .toShort()
             }
-            monoSamples[i] = (sum / channels).toShort()
+        } else {
+            val shortBuf = ordered.asShortBuffer()
+            val sampleCountTotal = minOf(byteCount / (2 * channels), shortBuf.remaining() / channels)
+            if (sampleCountTotal <= 0) return
+            ShortArray(sampleCountTotal) { i ->
+                var sum = 0
+                for (ch in 0 until channels) {
+                    sum += shortBuf.get(i * channels + ch).toInt()
+                }
+                (sum / channels).toShort()
+            }
         }
+        val sampleCountTotal = monoSamples.size
 
         if (sampleRate == TARGET_SAMPLE_RATE) {
-            writeShortsLittleEndian(monoSamples, monoSamples.size, out)
+            writeShortsLittleEndian(monoSamples, sampleCountTotal, out)
             return
         }
 

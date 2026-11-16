@@ -6,6 +6,7 @@ import com.aiutil.videoplayer.model.PlayerSettings
 import com.aiutil.videoplayer.model.SubtitleCue
 import com.aiutil.videoplayer.model.VideoItem
 import com.aiutil.videoplayer.util.SubtitleParser
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,6 +25,10 @@ class AiSubtitleController(
     private val scope: CoroutineScope,
     private val engine: TranslationEngine = TranslationEngine(),
 ) {
+
+    companion object {
+        private const val AUDIO_WINDOW_MS = 8_000L
+    }
 
     private val _cues = MutableStateFlow<List<SubtitleCue>>(emptyList())
     val cues: StateFlow<List<SubtitleCue>> = _cues.asStateFlow()
@@ -49,6 +54,9 @@ class AiSubtitleController(
     private var translateJob: Job? = null
     private var transcribeJob: Job? = null
     private val transcribedWindowStarts = HashSet<Long>()
+    private var activeTranscribeWindowStart: Long? = null
+    private var hasExternalSubtitleFile = false
+    private var latestPositionMs = 0L
     private var lastLiveTranslatedSource = ""
 
     fun loadForVideo(video: VideoItem, settings: PlayerSettings) {
@@ -56,6 +64,9 @@ class AiSubtitleController(
         translateJob?.cancel()
         transcribeJob?.cancel()
         transcribedWindowStarts.clear()
+        activeTranscribeWindowStart = null
+        hasExternalSubtitleFile = false
+        latestPositionMs = 0L
         _cues.value = emptyList()
         _activeCue.value = null
         _syncOffsetMs.value = 0L
@@ -69,14 +80,22 @@ class AiSubtitleController(
                 loadSubtitleFile(companion, settings)
             } else {
                 _loadedSubtitleName.value = null
-                _statusText.value = if (settings.aiTranslateEnabled) {
+                if (settings.aiTranslateEnabled && settings.autoTranscribeNoSubtitle) {
                     if (settings.geminiApiKey.isNotBlank()) {
-                        "자막 없음 · Gemini AI 오디오 실시간 번역 대기"
+                        _statusText.value = "자막 없음 · Gemini AI 오디오 실시간 번역 대기"
+                        withContext(Dispatchers.Main) {
+                            maybeTranscribeWindow(
+                                video = video,
+                                windowStart = 0L,
+                                settings = settings,
+                                interruptIfDifferent = true,
+                            )
+                        }
                     } else {
-                        "자막 파일 없음 · 자막 열기 또는 Gemini 키 설정 가능"
+                        _statusText.value = "무자막 음성 번역: 설정(⚙️)에서 Gemini API 키를 입력해 주세요"
                     }
                 } else {
-                    ""
+                    _statusText.value = ""
                 }
             }
         }
@@ -88,6 +107,7 @@ class AiSubtitleController(
                 SubtitleParser.parseAuto(file.readText(Charsets.UTF_8), file.extension)
             }.getOrDefault(emptyList())
         }
+        hasExternalSubtitleFile = parsed.isNotEmpty()
         _cues.value = parsed
         _loadedSubtitleName.value = file.name
         _statusText.value = if (parsed.isEmpty()) {
@@ -137,31 +157,59 @@ class AiSubtitleController(
     }
 
     fun onPlaybackPosition(positionMs: Long, isPlaying: Boolean, settings: PlayerSettings) {
+        latestPositionMs = positionMs.coerceAtLeast(0L)
         val list = _cues.value
-        if (list.isNotEmpty()) {
-            val active = SubtitleParser.findActiveCue(list, positionMs, _syncOffsetMs.value)
-            _activeCue.value = active
+        val active = if (list.isNotEmpty()) {
+            SubtitleParser.findActiveCue(list, latestPositionMs, _syncOffsetMs.value)
+        } else {
+            null
+        }
+        _activeCue.value = active
 
+        // 외부 자막 파일(.srt/.vtt/.ass)이 있을 때는 기존 자막 줄 배치 번역만 수행
+        if (hasExternalSubtitleFile) {
             if (settings.aiTranslateEnabled &&
                 active != null &&
                 active.translatedText.isNullOrBlank() &&
                 translateJob?.isActive != true
             ) {
-                pretranslateAround(positionMs, settings)
+                pretranslateAround(latestPositionMs, settings)
             }
             return
         }
 
-        _activeCue.value = null
-        // 자막 파일/트랙이 없고, AI 번역 + 오디오 전사가 켜져 있으며 Gemini 키가 있으면 오디오 청크 기반 AI 자막 생성
+        // 자막 파일/트랙이 없는 경우 오디오 청크 기반 실시간 AI 음성 인식·번역 수행
         val video = currentVideo ?: return
-        if (isPlaying &&
-            settings.aiTranslateEnabled &&
-            settings.autoTranscribeNoSubtitle &&
-            settings.geminiApiKey.isNotBlank() &&
-            _liveEmbeddedText.value.isBlank()
+        if (!settings.aiTranslateEnabled ||
+            !settings.autoTranscribeNoSubtitle ||
+            _liveEmbeddedText.value.isNotBlank()
         ) {
-            maybeTranscribeWindow(video, positionMs, settings)
+            return
+        }
+        if (settings.geminiApiKey.isBlank()) {
+            _statusText.value = "무자막 음성 번역: 설정(⚙️)에서 Gemini API 키를 입력해 주세요"
+            return
+        }
+
+        val currentWindow = (latestPositionMs / AUDIO_WINDOW_MS) * AUDIO_WINDOW_MS
+        if (!transcribedWindowStarts.contains(currentWindow)) {
+            maybeTranscribeWindow(
+                video = video,
+                windowStart = currentWindow,
+                settings = settings,
+                interruptIfDifferent = true,
+            )
+        } else if (isPlaying) {
+            // 현재 구간 전사가 이미 완료되었으면 다음 구간을 선행 프리페치해 대사 공백 방지
+            val nextWindow = currentWindow + AUDIO_WINDOW_MS
+            if (!transcribedWindowStarts.contains(nextWindow)) {
+                maybeTranscribeWindow(
+                    video = video,
+                    windowStart = nextWindow,
+                    settings = settings,
+                    interruptIfDifferent = false,
+                )
+            }
         }
     }
 
@@ -201,47 +249,86 @@ class AiSubtitleController(
 
     private fun maybeTranscribeWindow(
         video: VideoItem,
-        positionMs: Long,
+        windowStart: Long,
         settings: PlayerSettings,
+        interruptIfDifferent: Boolean,
     ) {
-        val windowStart = (positionMs / 10_000L) * 10_000L
-        if (transcribedWindowStarts.contains(windowStart)) return
-        if (transcribeJob?.isActive == true) return
+        val normalizedStart = (windowStart.coerceAtLeast(0L) / AUDIO_WINDOW_MS) * AUDIO_WINDOW_MS
+        if (video.durationMs in 1L..normalizedStart) return
+        if (transcribedWindowStarts.contains(normalizedStart)) return
 
-        transcribedWindowStarts.add(windowStart)
+        if (transcribeJob?.isActive == true) {
+            if (!interruptIfDifferent || activeTranscribeWindowStart == normalizedStart) return
+            transcribeJob?.cancel()
+        }
+
+        transcribedWindowStarts.add(normalizedStart)
+        activeTranscribeWindowStart = normalizedStart
         transcribeJob = scope.launch {
-            _statusText.value = "AI 오디오 인식·번역 중..."
-            val wav = AudioChunkExtractor.extractWavChunk(
-                context = context,
-                uriString = video.uri,
-                filePath = video.path,
-                startMs = windowStart,
-                durationMs = 10_000L,
-            )
-            if (wav == null) {
-                _statusText.value = "오디오 추출 불가"
-                return@launch
-            }
-            val segments = engine.transcribeAndTranslateAudio(
-                wavBytes = wav,
-                targetLangCode = settings.targetLangCode,
-                geminiApiKey = settings.geminiApiKey,
-            )
-            if (segments.isNotEmpty()) {
-                val baseIdx = _cues.value.size + 1
-                val newCues = segments.mapIndexed { idx, seg ->
-                    SubtitleCue(
-                        index = baseIdx + idx,
-                        startMs = windowStart + seg.startOffsetMs,
-                        endMs = windowStart + seg.endOffsetMs,
-                        originalText = seg.originalText,
-                        translatedText = seg.translatedText,
+            try {
+                _statusText.value = "AI 오디오 인식·번역 중..."
+                val wav = AudioChunkExtractor.extractWavChunk(
+                    context = context,
+                    uriString = video.uri,
+                    filePath = video.path,
+                    startMs = normalizedStart,
+                    durationMs = AUDIO_WINDOW_MS,
+                )
+                if (wav == null) {
+                    _statusText.value = "오디오 추출 불가"
+                    return@launch
+                }
+                val segments = engine.transcribeAndTranslateAudio(
+                    wavBytes = wav,
+                    targetLangCode = settings.targetLangCode,
+                    geminiApiKey = settings.geminiApiKey,
+                )
+                if (segments.isNotEmpty()) {
+                    val baseIdx = _cues.value.size + 1
+                    val newCues = segments.mapIndexed { idx, seg ->
+                        SubtitleCue(
+                            index = baseIdx + idx,
+                            startMs = normalizedStart + seg.startOffsetMs,
+                            endMs = normalizedStart + seg.endOffsetMs,
+                            originalText = seg.originalText,
+                            translatedText = seg.translatedText,
+                        )
+                    }
+                    val merged = (_cues.value + newCues).sortedBy { it.startMs }
+                    _cues.value = merged
+                    _activeCue.value = SubtitleParser.findActiveCue(merged, latestPositionMs, _syncOffsetMs.value)
+                    _statusText.value = "AI 음성 자막 활성 (${merged.size}줄)"
+                } else {
+                    _statusText.value = "AI 음성 인식 대기 중"
+                }
+
+                // 현재 위치 바로 다음 구간(최대 1윈도우 앞)만 연속 선행 전사
+                val nextWindow = normalizedStart + AUDIO_WINDOW_MS
+                if (currentVideo?.id == video.id &&
+                    !hasExternalSubtitleFile &&
+                    settings.aiTranslateEnabled &&
+                    settings.autoTranscribeNoSubtitle &&
+                    settings.geminiApiKey.isNotBlank() &&
+                    nextWindow <= latestPositionMs + AUDIO_WINDOW_MS &&
+                    !transcribedWindowStarts.contains(nextWindow) &&
+                    (video.durationMs <= 0L || nextWindow < video.durationMs)
+                ) {
+                    activeTranscribeWindowStart = null
+                    transcribeJob = null
+                    maybeTranscribeWindow(
+                        video = video,
+                        windowStart = nextWindow,
+                        settings = settings,
+                        interruptIfDifferent = false,
                     )
                 }
-                _cues.value = (_cues.value + newCues).sortedBy { it.startMs }
-                _statusText.value = "AI 음성 자막 생성됨"
-            } else {
-                _statusText.value = "AI 번역 대기 중"
+            } catch (ce: CancellationException) {
+                transcribedWindowStarts.remove(normalizedStart)
+                throw ce
+            } finally {
+                if (activeTranscribeWindowStart == normalizedStart) {
+                    activeTranscribeWindowStart = null
+                }
             }
         }
     }

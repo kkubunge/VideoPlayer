@@ -31,6 +31,7 @@ import org.json.JSONArray
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToLong
 
 /**
  * 동영상 자막 및 음성을 다국어 AI 번역하는 엔진.
@@ -165,14 +166,14 @@ class TranslationEngine {
     ): List<TranscribedSubtitle> = withContext(Dispatchers.IO) {
         if (geminiApiKey.isBlank() || wavBytes.size <= 44) return@withContext emptyList()
         runCatching {
+            val clipDurationMs = ((wavBytes.size - 44).coerceAtLeast(0) / 32L).coerceAtLeast(1_000L)
             val base64Audio = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
             val prompt = """
-                Listen to this video audio segment.
+                Listen to this video audio segment (duration: ${clipDurationMs}ms).
                 1. Transcribe spoken dialogue accurately in its original language.
                 2. Translate each dialogue line naturally into target language code "$targetLangCode".
                 3. Return ONLY a JSON array of objects with fields:
-                   "startMs" (integer milliseconds from start of this clip),
-                   "endMs" (integer milliseconds from start of this clip),
+                   "startMs" and "endMs" must be integer milliseconds between 0 and $clipDurationMs (NOT seconds),
                    "original" (string),
                    "translated" (string).
                 If there is only silence, music, or no speech, return [].
@@ -205,21 +206,7 @@ class TranslationEngine {
             val textPayload = callGeminiGenerateContent(bodyJson, geminiApiKey)
                 ?: return@withContext emptyList()
             val cleanArrayText = extractJsonArray(textPayload) ?: return@withContext emptyList()
-            val arr = json.parseToJsonElement(cleanArrayText).jsonArray
-            arr.mapNotNull { el ->
-                val obj = el.jsonObject
-                val orig = obj["original"]?.jsonPrimitive?.content?.trim().orEmpty()
-                val trans = obj["translated"]?.jsonPrimitive?.content?.trim().orEmpty()
-                if (orig.isBlank() && trans.isBlank()) return@mapNotNull null
-                val s = obj["startMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
-                val e = obj["endMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: (s + 3000L)
-                TranscribedSubtitle(
-                    startOffsetMs = s.coerceAtLeast(0L),
-                    endOffsetMs = e.coerceAtLeast(s + 800L),
-                    originalText = orig.ifBlank { trans },
-                    translatedText = trans.ifBlank { orig },
-                )
-            }
+            parseTranscribedSubtitles(cleanArrayText, clipDurationMs)
         }.getOrDefault(emptyList())
     }
 
@@ -407,3 +394,51 @@ internal fun resolveGeminiEndpoints(apiKey: String): List<String> {
         "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash-lite:generateContent?key=$encodedKey",
     )
 }
+
+/**
+ * Gemini 오디오 전사·번역 응답 JSON 배열을 파싱한다.
+ * 모델이 간혹 초(seconds) 단위로 `startMs`/`endMs`를 반환하는 경우 밀리초(ms)로 자동 보정한다.
+ */
+internal fun parseTranscribedSubtitles(
+    rawJsonArrayText: String,
+    clipDurationMs: Long = 8000L,
+): List<TranslationEngine.TranscribedSubtitle> = runCatching {
+    val parser = Json { ignoreUnknownKeys = true }
+    val arr = parser.parseToJsonElement(rawJsonArrayText).jsonArray
+    if (arr.isEmpty()) return@runCatching emptyList()
+
+    data class RawSeg(
+        val start: Double?,
+        val end: Double?,
+        val orig: String,
+        val trans: String,
+    )
+
+    val rawList = arr.mapNotNull { el ->
+        val obj = el.jsonObject
+        val orig = obj["original"]?.jsonPrimitive?.content?.trim().orEmpty()
+        val trans = obj["translated"]?.jsonPrimitive?.content?.trim().orEmpty()
+        if (orig.isBlank() && trans.isBlank()) return@mapNotNull null
+        val s = obj["startMs"]?.jsonPrimitive?.content?.toDoubleOrNull()
+        val e = obj["endMs"]?.jsonPrimitive?.content?.toDoubleOrNull()
+        RawSeg(start = s, end = e, orig = orig, trans = trans)
+    }
+    if (rawList.isEmpty()) return@runCatching emptyList()
+
+    val maxEnd = rawList.mapNotNull { it.end ?: it.start }.maxOrNull() ?: 0.0
+    val scale = if (maxEnd > 0.0 && maxEnd <= 30.0 && clipDurationMs >= 1000L) 1000.0 else 1.0
+    val safeDuration = clipDurationMs.coerceAtLeast(1000L)
+
+    rawList.map { seg ->
+        val startMs = ((seg.start ?: 0.0) * scale).roundToLong().coerceIn(0L, safeDuration)
+        val rawEndMs = seg.end?.let { (it * scale).roundToLong() } ?: (startMs + 2500L)
+        val minEndMs = (startMs + 400L).coerceAtMost(safeDuration)
+        val endMs = rawEndMs.coerceIn(minEndMs, safeDuration)
+        TranslationEngine.TranscribedSubtitle(
+            startOffsetMs = startMs,
+            endOffsetMs = endMs,
+            originalText = seg.orig.ifBlank { seg.trans },
+            translatedText = seg.trans.ifBlank { seg.orig },
+        )
+    }
+}.getOrDefault(emptyList())
