@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -158,6 +160,17 @@ fun ExplorerScreen(
         Environment.getExternalStorageDirectory()?.absolutePath ?: "/storage/emulated/0"
     }
     var currentDirPath by remember { mutableStateOf(storageRoot) }
+
+    // 목록 스크롤 위치 유지용 상태
+    val folderListState = rememberLazyListState()
+    val videoListStates = remember { mutableMapOf<String, LazyListState>() }
+    val videoListState = remember(openedVideoFolderPath) {
+        videoListStates.getOrPut(openedVideoFolderPath.orEmpty()) { LazyListState() }
+    }
+    val dirListStates = remember { mutableMapOf<String, LazyListState>() }
+    val dirListState = remember(currentDirPath) {
+        dirListStates.getOrPut(currentDirPath) { LazyListState() }
+    }
     var directoryEntries by remember { mutableStateOf<List<ExplorerEntry>>(emptyList()) }
 
     // 다중 선택 및 클립보드 (복사 / 이동)
@@ -570,6 +583,7 @@ fun ExplorerScreen(
                                 selectedPaths = selectedPaths,
                                 subtitleBaseNames = folderSubtitleBases,
                                 favoriteVideoIds = favoriteVideoIds,
+                                listState = videoListState,
                                 onVideoClick = { video ->
                                     if (selectedPaths.isNotEmpty()) {
                                         toggleSelect(video.path)
@@ -612,6 +626,7 @@ fun ExplorerScreen(
                                 folders = folders,
                                 selectedPaths = selectedPaths,
                                 favoriteFolderPaths = favoriteFolderPaths,
+                                listState = folderListState,
                                 onFolderClick = { folder ->
                                     if (selectedPaths.isNotEmpty()) {
                                         toggleSelect(folder.path)
@@ -651,6 +666,7 @@ fun ExplorerScreen(
                             selectedPaths = selectedPaths,
                             favoriteFolderPaths = favoriteFolderPaths,
                             favoriteVideoIds = favoriteVideoIds,
+                            listState = dirListState,
                             onNavigateDir = { newPath ->
                                 currentDirPath = newPath
                                 selectedPaths = emptySet()
@@ -910,6 +926,7 @@ private fun FolderListContent(
     folders: List<VideoFolder>,
     selectedPaths: Set<String>,
     favoriteFolderPaths: Set<String>,
+    listState: LazyListState,
     onFolderClick: (VideoFolder) -> Unit,
     onFolderLongClick: (VideoFolder) -> Unit,
     onToggleFavorite: (VideoFolder) -> Unit,
@@ -926,6 +943,7 @@ private fun FolderListContent(
         return
     }
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1066,6 +1084,7 @@ private fun VideoListContent(
     selectedPaths: Set<String>,
     subtitleBaseNames: Set<String>,
     favoriteVideoIds: Set<String>,
+    listState: LazyListState,
     onVideoClick: (VideoItem) -> Unit,
     onVideoLongClick: (VideoItem) -> Unit,
     onToggleFavorite: (VideoItem) -> Unit,
@@ -1077,6 +1096,7 @@ private fun VideoListContent(
     val historyMap = remember(historyItems) { historyItems.associateBy { it.id } }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1279,6 +1299,7 @@ private fun FileExplorerContent(
     selectedPaths: Set<String>,
     favoriteFolderPaths: Set<String>,
     favoriteVideoIds: Set<String>,
+    listState: LazyListState,
     onNavigateDir: (String) -> Unit,
     onEntryClick: (ExplorerEntry) -> Unit,
     onEntryLongClick: (ExplorerEntry) -> Unit,
@@ -1353,6 +1374,7 @@ private fun FileExplorerContent(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
