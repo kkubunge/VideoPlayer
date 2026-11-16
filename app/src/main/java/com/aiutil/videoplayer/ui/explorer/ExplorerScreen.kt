@@ -2,6 +2,7 @@ package com.aiutil.videoplayer.ui.explorer
 
 import android.os.Environment
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,6 +26,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Close
@@ -32,17 +36,14 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -123,10 +124,12 @@ fun ExplorerScreen(
 
     var allVideos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
+    var isLoadingDirectory by remember { mutableStateOf(false) }
     var localRefresh by remember { mutableIntStateOf(0) }
 
     // 동영상 폴더 탭 내부 진입 폴더 경로 (null 이면 폴더 목록 화면)
     var openedVideoFolderPath by remember { mutableStateOf<String?>(null) }
+    var folderSubtitleBases by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     // 파일 탐색기 탭 현재 디렉토리
     val storageRoot = remember {
@@ -148,17 +151,63 @@ fun ExplorerScreen(
         localRefresh++
     }
 
+    // 뒤로가기 버튼 처리: 폴더나 선택/검색 상태에서는 앱 종료 대신 이전 화면·상위 폴더로 이동
+    val canHandleBack = selectedPaths.isNotEmpty() ||
+        searchVisible ||
+        (selectedTab == ExplorerTab.FOLDERS && openedVideoFolderPath != null) ||
+        (selectedTab == ExplorerTab.FILES && currentDirPath != storageRoot) ||
+        selectedTab != ExplorerTab.FOLDERS
+
+    BackHandler(enabled = canHandleBack) {
+        when {
+            selectedPaths.isNotEmpty() -> selectedPaths = emptySet()
+            searchVisible -> {
+                searchVisible = false
+                searchQuery = ""
+            }
+            selectedTab == ExplorerTab.FOLDERS && openedVideoFolderPath != null -> {
+                openedVideoFolderPath = null
+            }
+            selectedTab == ExplorerTab.FILES && currentDirPath != storageRoot -> {
+                val parent = File(currentDirPath).parent
+                currentDirPath = if (parent != null && parent.length >= storageRoot.length) {
+                    parent
+                } else {
+                    storageRoot
+                }
+            }
+            selectedTab != ExplorerTab.FOLDERS -> {
+                selectedTab = ExplorerTab.FOLDERS
+            }
+        }
+    }
+
     LaunchedEffect(hasReadPermission, hasAllFilesAccess, refreshSignal, localRefresh) {
         if (!hasReadPermission) {
             allVideos = emptyList()
             return@LaunchedEffect
         }
         isScanning = true
-        val scanned = withContext(Dispatchers.IO) {
-            VideoScanner.scanVideos(context)
+        val fast = withContext(Dispatchers.IO) {
+            VideoScanner.scanVideosFast(context)
         }
-        allVideos = scanned
+        allVideos = fast
+        val merged = withContext(Dispatchers.IO) {
+            VideoScanner.scanStorageExtras(context, fast)
+        }
+        allVideos = merged
         isScanning = false
+    }
+
+    LaunchedEffect(openedVideoFolderPath) {
+        val folderPath = openedVideoFolderPath
+        folderSubtitleBases = if (folderPath.isNullOrBlank()) {
+            emptySet()
+        } else {
+            withContext(Dispatchers.IO) {
+                VideoScanner.scanSubtitleBaseNamesInFolder(folderPath)
+            }
+        }
     }
 
     val videoIndex = remember(allVideos) {
@@ -168,8 +217,10 @@ fun ExplorerScreen(
     LaunchedEffect(currentDirPath, settings.sortOrder, videoIndex, localRefresh, refreshSignal, hasReadPermission) {
         if (!hasReadPermission) {
             directoryEntries = emptyList()
+            isLoadingDirectory = false
             return@LaunchedEffect
         }
+        isLoadingDirectory = true
         directoryEntries = withContext(Dispatchers.IO) {
             FileExplorerManager.listDirectory(
                 dir = File(currentDirPath),
@@ -177,6 +228,7 @@ fun ExplorerScreen(
                 videoIndex = videoIndex,
             )
         }
+        isLoadingDirectory = false
     }
 
     val folders = remember(allVideos, settings.sortOrder, searchQuery) {
@@ -282,7 +334,7 @@ fun ExplorerScreen(
                             Icon(Icons.Default.ContentCopy, contentDescription = "복사")
                         }
                         IconButton(onClick = { startClipboard(ClipboardOp.MOVE, selectedPaths.toList()) }) {
-                            Icon(Icons.Default.DriveFileMove, contentDescription = "이동")
+                            Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "이동")
                         }
                         IconButton(onClick = { deleteTargets = selectedPaths.toList() }) {
                             Icon(Icons.Default.Delete, contentDescription = "삭제")
@@ -320,7 +372,7 @@ fun ExplorerScreen(
                         }
                         Box {
                             IconButton(onClick = { sortMenuExpanded = true }) {
-                                Icon(Icons.Default.Sort, contentDescription = "정렬")
+                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "정렬")
                             }
                             DropdownMenu(
                                 expanded = sortMenuExpanded,
@@ -459,6 +511,14 @@ fun ExplorerScreen(
                 }
             }
 
+            if (isScanning || isLoadingDirectory) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                )
+            }
+
             if (isScanning && allVideos.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -475,6 +535,7 @@ fun ExplorerScreen(
                                 videos = activeVideoFolder.videos,
                                 historyItems = historyItems,
                                 selectedPaths = selectedPaths,
+                                subtitleBaseNames = folderSubtitleBases,
                                 onVideoClick = { video ->
                                     if (selectedPaths.isNotEmpty()) {
                                         toggleSelect(video.path)
@@ -534,6 +595,7 @@ fun ExplorerScreen(
                             storageRoot = storageRoot,
                             currentDirPath = currentDirPath,
                             entries = filteredEntries,
+                            isLoading = isLoadingDirectory,
                             selectedPaths = selectedPaths,
                             onNavigateDir = { newPath ->
                                 currentDirPath = newPath
@@ -812,7 +874,7 @@ private fun FolderListContent(
                             )
                             DropdownMenuItem(
                                 text = { Text("이동") },
-                                leadingIcon = { Icon(Icons.Default.DriveFileMove, null) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, null) },
                                 onClick = { menuExpanded = false; onMove(folder) },
                             )
                             DropdownMenuItem(
@@ -841,6 +903,7 @@ private fun VideoListContent(
     videos: List<VideoItem>,
     historyItems: List<PlaybackHistoryItem>,
     selectedPaths: Set<String>,
+    subtitleBaseNames: Set<String>,
     onVideoClick: (VideoItem) -> Unit,
     onVideoLongClick: (VideoItem) -> Unit,
     onCopy: (VideoItem) -> Unit,
@@ -858,8 +921,13 @@ private fun VideoListContent(
         items(videos, key = { it.id }) { video ->
             val isSelected = video.path.isNotBlank() && selectedPaths.contains(video.path)
             val hist = historyMap[video.id] ?: historyMap[video.path]
-            val hasSubtitle = remember(video.path) {
-                VideoScanner.findCompanionSubtitles(video.path).isNotEmpty()
+            val hasSubtitle = remember(video.path, subtitleBaseNames) {
+                if (video.path.isBlank()) {
+                    false
+                } else {
+                    val base = File(video.path).nameWithoutExtension.lowercase()
+                    subtitleBaseNames.contains(base)
+                }
             }
             var menuExpanded by remember { mutableStateOf(false) }
 
@@ -987,7 +1055,7 @@ private fun VideoListContent(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("이동") },
-                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, null) },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, null) },
                                     onClick = { menuExpanded = false; onMove(video) },
                                 )
                                 DropdownMenuItem(
@@ -1017,6 +1085,7 @@ private fun FileExplorerContent(
     storageRoot: String,
     currentDirPath: String,
     entries: List<ExplorerEntry>,
+    isLoading: Boolean,
     selectedPaths: Set<String>,
     onNavigateDir: (String) -> Unit,
     onEntryClick: (ExplorerEntry) -> Unit,
@@ -1067,6 +1136,17 @@ private fun FileExplorerContent(
                     label = { Text(seg) },
                 )
             }
+        }
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(10.dp))
+                    Text("폴더 내용을 불러오는 중...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            return
         }
 
         if (entries.isEmpty()) {
@@ -1145,7 +1225,7 @@ private fun FileExplorerContent(
                             }
                             else -> {
                                 Icon(
-                                    imageVector = Icons.Default.InsertDriveFile,
+                                    imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(32.dp),
@@ -1163,7 +1243,7 @@ private fun FileExplorerContent(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             val subInfo = if (entry.isDirectory) {
-                                "항목 ${entry.childCount}개"
+                                if (entry.childCount >= 0) "항목 ${entry.childCount}개" else "폴더"
                             } else {
                                 val dur = entry.videoItem?.durationMs?.takeIf { it > 0L }?.let {
                                     " · ${Format.duration(it)}"
@@ -1198,7 +1278,7 @@ private fun FileExplorerContent(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("이동") },
-                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, null) },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, null) },
                                     onClick = { menuExpanded = false; onMove(entry) },
                                 )
                                 DropdownMenuItem(

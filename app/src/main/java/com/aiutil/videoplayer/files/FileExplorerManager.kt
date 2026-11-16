@@ -27,14 +27,13 @@ object FileExplorerManager {
         val entries = raw.mapNotNull { file ->
             if (file.name.startsWith(".")) return@mapNotNull null
             if (file.isDirectory) {
-                val childCount = file.listFiles()?.count { !it.name.startsWith(".") } ?: 0
                 ExplorerEntry(
                     name = file.name,
                     path = file.absolutePath,
                     isDirectory = true,
                     sizeBytes = 0L,
                     lastModifiedMs = file.lastModified(),
-                    childCount = childCount,
+                    childCount = -1,
                 )
             } else {
                 val isVideo = VideoScanner.isVideoFile(file)

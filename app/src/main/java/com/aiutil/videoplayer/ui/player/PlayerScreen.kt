@@ -43,6 +43,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.BrightnessHigh
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
@@ -64,8 +66,9 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -266,6 +269,7 @@ fun PlayerScreen(
     var showSpeedSheet by remember { mutableStateOf(false) }
     var showSleepDialog by remember { mutableStateOf(false) }
     var showSubtitleFileDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
 
     // AI 자막 상태 수집
     val activeCue by subtitleController.activeCue.collectAsState()
@@ -741,7 +745,7 @@ fun PlayerScreen(
                                             applyVolumeFraction(newVol)
                                             val pct = (newVol * 100f).roundToInt()
                                             hudState = HudOverlayState(
-                                                icon = Icons.Default.VolumeUp,
+                                                icon = Icons.AutoMirrored.Filled.VolumeUp,
                                                 title = "볼륨 $pct%",
                                                 progress = newVol,
                                             )
@@ -951,7 +955,7 @@ fun PlayerScreen(
                         .align(Alignment.BottomCenter)
                         .padding(
                             horizontal = 20.dp,
-                            vertical = if (controlsVisible && !isInPipMode) 118.dp else 26.dp,
+                            vertical = if (controlsVisible && !isInPipMode) 88.dp else 22.dp,
                         ),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -976,87 +980,79 @@ fun PlayerScreen(
             }
         }
 
-        // 4. 더블터치 좌/우 리플 피드백
+        // 4. 더블터치 좌/우 컴팩트 반투명 피드백
         val dtf = doubleTapFeedback
         if (dtf != null && !isInPipMode) {
-            Box(
+            Surface(
                 modifier = Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(0.38f)
                     .align(if (dtf.isRightSide) Alignment.CenterEnd else Alignment.CenterStart)
-                    .background(
-                        Color.White.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(
-                            topStart = if (dtf.isRightSide) 999.dp else 0.dp,
-                            bottomStart = if (dtf.isRightSide) 999.dp else 0.dp,
-                            topEnd = if (dtf.isRightSide) 0.dp else 999.dp,
-                            bottomEnd = if (dtf.isRightSide) 0.dp else 999.dp,
-                        ),
-                    ),
-                contentAlignment = Alignment.Center,
+                    .padding(horizontal = 24.dp),
+                color = Color.Black.copy(alpha = 0.42f),
+                shape = RoundedCornerShape(20.dp),
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Icon(
                         imageVector = if (dtf.isRightSide) Icons.Default.FastForward else Icons.Default.FastRewind,
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(38.dp),
+                        modifier = Modifier.size(16.dp),
                     )
-                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = dtf.label,
                         color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
                     )
                 }
             }
         }
 
-        // 5. 중앙 제스처 HUD (밝기 / 볼륨 / 프레임 이동 / 길게터치 배속)
+        // 5. 컴팩트 반투명 하단 제스처 HUD (밝기 / 볼륨 / 프레임 이동 / 길게터치 배속)
         val hud = hudState
         if (hud != null && !isInPipMode) {
             Surface(
-                modifier = Modifier.align(Alignment.Center),
-                color = Color.Black.copy(alpha = 0.78f),
-                shape = RoundedCornerShape(16.dp),
-                tonalElevation = 8.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = if (controlsVisible) 92.dp else 44.dp),
+                color = Color.Black.copy(alpha = 0.44f),
+                shape = RoundedCornerShape(20.dp),
             ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 24.dp, vertical = 16.dp)
-                        .width(210.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(
                         imageVector = hud.icon,
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(34.dp),
+                        modifier = Modifier.size(16.dp),
                     )
                     Text(
                         text = hud.title,
                         color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     if (hud.subtitle.isNotBlank()) {
                         Text(
                             text = hud.subtitle,
                             color = Color.White.copy(alpha = 0.85f),
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Center,
+                            fontSize = 11.sp,
                         )
                     }
                     if (hud.progress != null) {
                         LinearProgressIndicator(
                             progress = { hud.progress.coerceIn(0f, 1f) },
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(5.dp)
-                                .clip(RoundedCornerShape(3.dp)),
+                                .width(52.dp)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp)),
                             color = Color(0xFF42A5F5),
                             trackColor = Color.White.copy(alpha = 0.25f),
                         )
@@ -1071,26 +1067,31 @@ fun PlayerScreen(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .statusBarsPadding()
-                    .padding(16.dp)
+                    .padding(12.dp)
                     .clickable {
                         isLocked = false
                         controlsVisible = true
                     },
-                color = Color.Black.copy(alpha = 0.7f),
+                color = Color.Black.copy(alpha = 0.5f),
                 shape = CircleShape,
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Icon(Icons.Default.Lock, contentDescription = "잠금 해제", tint = Color.White)
-                    Text("잠금 해제", color = Color.White, fontSize = 13.sp)
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = "잠금 해제",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text("잠금 해제", color = Color.White, fontSize = 11.sp)
                 }
             }
         }
 
-        // 7. 상/하단 컨트롤 오버레이 (화면 터치 시 표시)
+        // 7. 컴팩트 상/하단 컨트롤 오버레이 (화면 터치 시 표시)
         AnimatedVisibility(
             visible = controlsVisible && !isLocked && !isInPipMode,
             enter = fadeIn(),
@@ -1098,33 +1099,37 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // 상단 바
+                // 슬림 상단 바
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color.Black.copy(alpha = 0.82f), Color.Transparent)
+                                listOf(Color.Black.copy(alpha = 0.62f), Color.Transparent)
                             )
                         )
                         .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onExit) {
+                    IconButton(
+                        onClick = onExit,
+                        modifier = Modifier.size(36.dp),
+                    ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "뒤로",
                             tint = Color.White,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                     Column(modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) {
                         Text(
                             text = currentVideo.title,
                             color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1132,51 +1137,59 @@ fun PlayerScreen(
                             if (playlist.size > 1) append("${currentIndex + 1}/${playlist.size}")
                             if (settings.aiTranslateEnabled) {
                                 if (isNotEmpty()) append(" · ")
-                                append("AI 번역(${settings.targetLangCode})")
+                                append("AI(${settings.targetLangCode})")
                             }
-                            if (subtitleStatus.isNotBlank()) {
+                            if (repeatA != null) {
                                 if (isNotEmpty()) append(" · ")
-                                append(subtitleStatus)
+                                append(if (repeatB == null) "구간A" else "구간반복")
+                            }
+                            if (sleepRemainingSec != null) {
+                                if (isNotEmpty()) append(" · ")
+                                append("${sleepRemainingSec!! / 60}분")
                             }
                         }
                         if (infoLine.isNotBlank()) {
                             Text(
                                 text = infoLine,
-                                color = Color.White.copy(alpha = 0.78f),
-                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.72f),
+                                fontSize = 10.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
 
-                    // 배속 칩 (누르면 배속 시트, 길게누르기 외 직접 선택/1.0 초기화)
+                    // 배속 칩
                     Surface(
                         color = if (abs(playbackSpeed - 1.0f) > 0.01f) {
-                            Color(0xFF1E88E5)
+                            Color(0xFF1E88E5).copy(alpha = 0.85f)
                         } else {
-                            Color.White.copy(alpha = 0.18f)
+                            Color.White.copy(alpha = 0.16f)
                         },
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
-                            .padding(horizontal = 4.dp)
+                            .padding(horizontal = 2.dp)
                             .clickable { showSpeedSheet = true },
                     ) {
                         Text(
                             text = Format.speed(playbackSpeed),
                             color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                         )
                     }
 
                     // AI 번역 버튼
-                    IconButton(onClick = { showAiSheet = true }) {
+                    IconButton(
+                        onClick = { showAiSheet = true },
+                        modifier = Modifier.size(34.dp),
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Translate,
                             contentDescription = "AI 자막 번역",
                             tint = if (settings.aiTranslateEnabled) Color(0xFF64B5F6) else Color.White,
+                            modifier = Modifier.size(19.dp),
                         )
                     }
 
@@ -1186,36 +1199,107 @@ fun PlayerScreen(
                             exoPlayer.pause()
                             showDeleteDialog = true
                         },
+                        modifier = Modifier.size(34.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "동영상 삭제",
                             tint = Color(0xFFFF8A80),
+                            modifier = Modifier.size(19.dp),
                         )
                     }
 
-                    // 설정 버튼
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "설정",
-                            tint = Color.White,
-                        )
+                    // 부가 기능 통합 더보기 메뉴
+                    Box {
+                        IconButton(
+                            onClick = { showMoreMenu = true },
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "더보기",
+                                tint = Color.White,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("오디오 · 내장 자막 트랙") },
+                                leadingIcon = { Icon(Icons.Default.Audiotrack, null) },
+                                onClick = { showMoreMenu = false; showTrackSheet = true },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when {
+                                            repeatA == null -> "구간 반복 설정 (A-B)"
+                                            repeatB == null -> "반복 끝점 B 지정 (A: ${Format.duration(repeatA!!)})"
+                                            else -> "구간 반복 해제"
+                                        }
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Default.Repeat, null) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    val now = exoPlayer.currentPosition
+                                    when {
+                                        repeatA == null -> {
+                                            repeatA = now
+                                            Toast.makeText(context, "반복 시작점(A) 설정", Toast.LENGTH_SHORT).show()
+                                        }
+                                        repeatB == null -> {
+                                            if (now > repeatA!! + 300L) {
+                                                repeatB = now
+                                                exoPlayer.seekTo(repeatA!!)
+                                                Toast.makeText(context, "구간 반복 시작", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "A 이후 지점에서 B를 눌러주세요.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        else -> {
+                                            repeatA = null
+                                            repeatB = null
+                                            Toast.makeText(context, "구간 반복 해제", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("PIP 팝업 창 모드") },
+                                leadingIcon = { Icon(Icons.Default.PictureInPictureAlt, null) },
+                                onClick = { showMoreMenu = false; enterPip() },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(sleepRemainingSec?.let { "취침 타이머 (${it / 60}분 남음)" } ?: "취침 타이머")
+                                },
+                                leadingIcon = { Icon(Icons.Default.Timer, null) },
+                                onClick = { showMoreMenu = false; showSleepDialog = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("플레이어 & AI 설정") },
+                                leadingIcon = { Icon(Icons.Default.Settings, null) },
+                                onClick = { showMoreMenu = false; onOpenSettings() },
+                            )
+                        }
                     }
                 }
 
-                // 하단 바
+                // 슬림 하단 바
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.64f))
                             )
                         )
                         .navigationBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     // 시간 탐색 슬라이더
                     Row(
@@ -1226,7 +1310,7 @@ fun PlayerScreen(
                         Text(
                             text = Format.duration(shownPos),
                             color = Color.White,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                         )
                         Slider(
                             value = if (durationMs > 0L) {
@@ -1243,57 +1327,83 @@ fun PlayerScreen(
                             },
                             modifier = Modifier
                                 .weight(1f)
-                                .padding(horizontal = 8.dp),
+                                .height(26.dp)
+                                .padding(horizontal = 6.dp),
                             colors = SliderDefaults.colors(
                                 thumbColor = Color(0xFF42A5F5),
                                 activeTrackColor = Color(0xFF42A5F5),
-                                inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                                inactiveTrackColor = Color.White.copy(alpha = 0.28f),
                             ),
                         )
                         Text(
                             text = Format.duration(durationMs),
                             color = Color.White,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                         )
                     }
 
-                    // 핵심 재생 컨트롤: 잠금 / -1F / 이전곡 / 재생일시정지 / 다음곡 / +1F / 화면비율
+                    // 핵심 컴팩트 컨트롤 한 줄: 잠금 / 회전 / -1F / 이전 / 재생 / 다음 / +1F / 자막 / 비율
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(onClick = { isLocked = true }) {
-                            Icon(Icons.Default.LockOpen, contentDescription = "화면 잠금", tint = Color.White)
+                        IconButton(
+                            onClick = { isLocked = true },
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.LockOpen,
+                                contentDescription = "화면 잠금",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
                         }
 
-                        // 1프레임 뒤로
+                        IconButton(
+                            onClick = {
+                                val next = ScreenOrientationMode.entries[
+                                    (orientationMode.ordinal + 1) % ScreenOrientationMode.entries.size
+                                ]
+                                orientationMode = next
+                                Toast.makeText(context, next.label, Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.ScreenRotation,
+                                contentDescription = orientationMode.label,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+
                         TextButton(
                             onClick = { stepSingleFrame(forward = false) },
-                            contentPadding = PaddingValues(horizontal = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp),
+                            modifier = Modifier.height(32.dp),
                         ) {
-                            Text("-1F", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("-1F", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
 
-                        // 이전 동영상 버튼 (요구사항 7)
                         IconButton(
                             onClick = { if (currentIndex > 0) goToVideo(currentIndex - 1) },
                             enabled = currentIndex > 0,
+                            modifier = Modifier.size(36.dp),
                         ) {
                             Icon(
                                 Icons.Default.SkipPrevious,
                                 contentDescription = "이전 동영상",
                                 tint = if (currentIndex > 0) Color.White else Color.White.copy(alpha = 0.35f),
-                                modifier = Modifier.size(34.dp),
+                                modifier = Modifier.size(24.dp),
                             )
                         }
 
-                        // 재생 / 일시정지
                         Surface(
-                            color = Color.White.copy(alpha = 0.2f),
+                            color = Color.White.copy(alpha = 0.18f),
                             shape = CircleShape,
                             modifier = Modifier
-                                .size(54.dp)
+                                .size(38.dp)
                                 .clickable {
                                     if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                                 },
@@ -1303,15 +1413,15 @@ fun PlayerScreen(
                                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = if (isPlaying) "일시정지" else "재생",
                                     tint = Color.White,
-                                    modifier = Modifier.size(34.dp),
+                                    modifier = Modifier.size(24.dp),
                                 )
                             }
                         }
 
-                        // 다음 동영상 버튼 (요구사항 7)
                         IconButton(
                             onClick = { if (currentIndex + 1 < playlist.size) goToVideo(currentIndex + 1) },
                             enabled = currentIndex + 1 < playlist.size,
+                            modifier = Modifier.size(36.dp),
                         ) {
                             Icon(
                                 Icons.Default.SkipNext,
@@ -1321,103 +1431,45 @@ fun PlayerScreen(
                                 } else {
                                     Color.White.copy(alpha = 0.35f)
                                 },
-                                modifier = Modifier.size(34.dp),
+                                modifier = Modifier.size(24.dp),
                             )
                         }
 
-                        // 1프레임 앞으로
                         TextButton(
                             onClick = { stepSingleFrame(forward = true) },
-                            contentPadding = PaddingValues(horizontal = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp),
+                            modifier = Modifier.height(32.dp),
                         ) {
-                            Text("+1F", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("+1F", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
 
-                        // 화면 비율 전환
+                        IconButton(
+                            onClick = { subtitlesVisible = !subtitlesVisible },
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Subtitles,
+                                contentDescription = "자막 토글",
+                                tint = if (subtitlesVisible) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.55f),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+
                         IconButton(
                             onClick = {
                                 val next = VideoScaleMode.entries[(scaleMode.ordinal + 1) % VideoScaleMode.entries.size]
                                 scaleMode = next
                                 Toast.makeText(context, "화면 비율: ${next.label}", Toast.LENGTH_SHORT).show()
                             },
+                            modifier = Modifier.size(34.dp),
                         ) {
-                            Icon(Icons.Default.AspectRatio, contentDescription = "화면 비율", tint = Color.White)
+                            Icon(
+                                Icons.Default.AspectRatio,
+                                contentDescription = "화면 비율",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
                         }
-                    }
-
-                    // 부가 유틸리티 바 (회전, 오디오/자막 트랙, 구간반복, PIP, 취침타이머)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        PlayerPillButton(
-                            icon = Icons.Default.ScreenRotation,
-                            label = orientationMode.label,
-                            onClick = {
-                                val next = ScreenOrientationMode.entries[
-                                    (orientationMode.ordinal + 1) % ScreenOrientationMode.entries.size
-                                ]
-                                orientationMode = next
-                            },
-                        )
-                        PlayerPillButton(
-                            icon = Icons.Default.Subtitles,
-                            label = if (subtitlesVisible) "자막 ON" else "자막 OFF",
-                            highlighted = subtitlesVisible,
-                            onClick = { subtitlesVisible = !subtitlesVisible },
-                        )
-                        PlayerPillButton(
-                            icon = Icons.Default.Audiotrack,
-                            label = "트랙/자막",
-                            onClick = { showTrackSheet = true },
-                        )
-                        PlayerPillButton(
-                            icon = Icons.Default.Repeat,
-                            label = when {
-                                repeatA == null -> "구간반복"
-                                repeatB == null -> "A(${Format.duration(repeatA!!)})→B?"
-                                else -> "반복중 ✕"
-                            },
-                            highlighted = repeatA != null,
-                            onClick = {
-                                val now = exoPlayer.currentPosition
-                                when {
-                                    repeatA == null -> {
-                                        repeatA = now
-                                        Toast.makeText(context, "반복 시작점(A) 설정", Toast.LENGTH_SHORT).show()
-                                    }
-                                    repeatB == null -> {
-                                        if (now > repeatA!! + 300L) {
-                                            repeatB = now
-                                            exoPlayer.seekTo(repeatA!!)
-                                            Toast.makeText(context, "구간 반복 시작", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "A 이후 지점에서 B를 눌러주세요.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    else -> {
-                                        repeatA = null
-                                        repeatB = null
-                                        Toast.makeText(context, "구간 반복 해제", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            },
-                        )
-                        PlayerPillButton(
-                            icon = Icons.Default.PictureInPictureAlt,
-                            label = "PIP",
-                            onClick = { enterPip() },
-                        )
-                        PlayerPillButton(
-                            icon = Icons.Default.Timer,
-                            label = sleepRemainingSec?.let { "${it / 60}분 남음" } ?: "취침타이머",
-                            highlighted = sleepRemainingSec != null,
-                            onClick = { showSleepDialog = true },
-                        )
                     }
                 }
             }
@@ -1806,29 +1858,6 @@ private fun SubtitleTextLine(
             .background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(6.dp))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
-}
-
-@Composable
-private fun PlayerPillButton(
-    icon: ImageVector,
-    label: String,
-    highlighted: Boolean = false,
-    onClick: () -> Unit,
-) {
-    Surface(
-        color = if (highlighted) Color(0xFF1E88E5).copy(alpha = 0.85f) else Color.White.copy(alpha = 0.16f),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.clickable(onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-            Text(label, color = Color.White, fontSize = 12.sp)
-        }
-    }
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

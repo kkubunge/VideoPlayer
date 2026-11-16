@@ -31,9 +31,32 @@ object VideoScanner {
         file.isFile && file.extension.lowercase(Locale.US) in SUBTITLE_EXTENSIONS
 
     fun scanVideos(context: Context): List<VideoItem> {
+        val byKey = scanMediaStoreOnly(context)
+        val rootDir = Environment.getExternalStorageDirectory()
+        if (rootDir != null && rootDir.canRead()) {
+            scanDirectoryShallowAndSafe(rootDir, byKey, maxDepth = 5)
+        }
+        return byKey.values.toList()
+    }
+
+    /** MediaStore 인덱스만 읽어 즉시 반환한다 (초기 화면 및 폴더 진입 속도 최적화). */
+    fun scanVideosFast(context: Context): List<VideoItem> =
+        scanMediaStoreOnly(context).values.toList()
+
+    /** MediaStore에 아직 등록되지 않은 파일만 추가 탐색한다. */
+    fun scanStorageExtras(context: Context, existing: List<VideoItem>): List<VideoItem> {
+        val byKey = LinkedHashMap<String, VideoItem>(existing.size)
+        existing.forEach { byKey[it.id] = it }
+        val rootDir = Environment.getExternalStorageDirectory()
+        if (rootDir != null && rootDir.canRead()) {
+            scanDirectoryShallowAndSafe(rootDir, byKey, maxDepth = 5)
+        }
+        return byKey.values.toList()
+    }
+
+    private fun scanMediaStoreOnly(context: Context): LinkedHashMap<String, VideoItem> {
         val byKey = LinkedHashMap<String, VideoItem>()
 
-        // 1. MediaStore 기반 스캔 (빠르고 해상도·재생시간 메타데이터 포함)
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
         } else {
@@ -76,7 +99,6 @@ object VideoScanner {
                     val mediaId = cursor.getLong(idCol)
                     val contentUri = ContentUris.withAppendedId(collection, mediaId).toString()
                     val filePath = if (dataCol >= 0) cursor.getString(dataCol).orEmpty() else ""
-                    if (filePath.isNotBlank() && !File(filePath).exists()) continue
 
                     val file = if (filePath.isNotBlank()) File(filePath) else null
                     val title = cursor.getString(nameCol)?.takeIf { it.isNotBlank() }
@@ -105,14 +127,7 @@ object VideoScanner {
                 }
             }
         }
-
-        // 2. 전체 파일 접근 권한이 있는 경우 MediaStore에 아직 색인되지 않은 파일도 보완 스캔
-        val rootDir = Environment.getExternalStorageDirectory()
-        if (rootDir != null && rootDir.canRead()) {
-            scanDirectoryShallowAndSafe(rootDir, byKey, maxDepth = 6)
-        }
-
-        return byKey.values.toList()
+        return byKey
     }
 
     private fun scanDirectoryShallowAndSafe(
@@ -195,6 +210,24 @@ object VideoScanner {
             SortOrder.SIZE_DESC -> videos.sortedByDescending { it.sizeBytes }
             SortOrder.DURATION_DESC -> videos.sortedByDescending { it.durationMs }
         }
+    }
+
+    /** 특정 폴더 내 모든 자막 파일의 기본 이름(소문자)을 한 번의 I/O로 수집한다. */
+    fun scanSubtitleBaseNamesInFolder(folderPath: String): Set<String> {
+        if (folderPath.isBlank()) return emptySet()
+        val dir = File(folderPath)
+        if (!dir.isDirectory) return emptySet()
+        val files = dir.listFiles() ?: return emptySet()
+        val bases = HashSet<String>()
+        for (f in files) {
+            if (isSubtitleFile(f)) {
+                val noExt = f.nameWithoutExtension.lowercase(Locale.US)
+                bases.add(noExt)
+                val dot = noExt.indexOf('.')
+                if (dot > 0) bases.add(noExt.substring(0, dot))
+            }
+        }
+        return bases
     }
 
     /** 동영상 파일과 같은 폴더에 있는 동반 자막 파일(.srt/.vtt/.ass) 목록을 우선순위대로 반환한다. */
