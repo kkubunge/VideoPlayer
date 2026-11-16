@@ -341,7 +341,7 @@ class TranslationEngine {
     }
 
     /**
-     * API 키 유형(`AQ.` / `AIza...`)에 맞는 Gemini 엔드포인트들을 우선순위대로 호출해 응답 텍스트를 반환한다.
+     * 설정된 우선순위에 따라 최신 Gemini 모델 및 엔드포인트를 순차 호출해 응답 텍스트를 반환한다.
      */
     private fun callGeminiGenerateContent(bodyJson: String, rawApiKey: String): String? {
         val cleanKey = rawApiKey.trim()
@@ -391,21 +391,19 @@ class TranslationEngine {
 }
 
 /**
- * Gemini API 키 접두어에 따라 호출할 엔드포인트 우선순위 목록을 반환한다.
- * - `AQ.`로 시작하는 키: Vertex AI Express Mode / 신규 Cloud 키 우선, 실패 시 AI Studio 폴백
- * - 그 외(`AIza...` 등): AI Studio 엔드포인트 우선, 실패 시 Vertex AI Express Mode 폴백
+ * Gemini API 호출용 엔드포인트 우선순위 목록을 반환한다.
+ * - 신규 발급 키에서 deprecated 모델(gemini-2.5-flash) 404 오류를 피하기 위해
+ *   최신 모델(`gemini-3.5-flash-lite`, `gemini-4-hydrogen`)을 우선 호출한다.
+ * - AI Studio(`generativelanguage.googleapis.com`) 실패 시 기존 호환 및 Vertex AI Express Mode로 폴백한다.
  */
 internal fun resolveGeminiEndpoints(apiKey: String): List<String> {
     val cleanKey = apiKey.trim()
     if (cleanKey.isEmpty()) return emptyList()
     val encodedKey = URLEncoder.encode(cleanKey, "UTF-8")
-    val vertexUrl =
-        "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent?key=$encodedKey"
-    val aiStudioUrl =
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$encodedKey"
-    return if (cleanKey.startsWith("AQ.", ignoreCase = true)) {
-        listOf(vertexUrl, aiStudioUrl)
-    } else {
-        listOf(aiStudioUrl, vertexUrl)
-    }
+    return listOf(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$encodedKey",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent?key=$encodedKey",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$encodedKey",
+        "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash-lite:generateContent?key=$encodedKey",
+    )
 }
