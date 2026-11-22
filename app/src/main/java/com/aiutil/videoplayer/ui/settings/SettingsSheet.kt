@@ -84,18 +84,47 @@ fun PlayerSettingsSheet(
 
             HorizontalDivider()
 
+            Text(
+                text = "화면 좌/우 드래그 이동 설정",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "재생 화면을 좌/우로 드래그할 때 초 단위로 실시간 이동합니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "좌/우 드래그 이동 범위: ${settings.dragSeekSeconds}초",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(3, 5, 10, 15, 30, 60, 120, 180, 300).forEach { sec ->
+                    FilterChip(
+                        selected = settings.dragSeekSeconds == sec,
+                        onClick = { onUpdate { it.copy(dragSeekSeconds = sec) } },
+                        label = { Text("${sec}초") },
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
             SeekStepSelector(
-                title = "좌/우 드래그 & 앞/뒤 이동 설정",
-                unit = settings.seekMoveUnit,
-                seconds = settings.seekMoveSeconds,
-                frames = settings.seekMoveFrames,
-                secondsLabelPrefix = "좌/우 이동 범위",
-                framesLabelPrefix = "좌/우 이동 프레임",
-                secondOptions = listOf(3, 5, 10, 15, 30, 60, 120, 300),
+                title = "하단 앞/뒤 이동 버튼 설정",
+                unit = settings.buttonSeekUnit,
+                seconds = settings.buttonSeekSeconds,
+                frames = settings.buttonSeekFrames,
+                secondsLabelPrefix = "버튼 이동 시간",
+                framesLabelPrefix = "버튼 이동 프레임",
+                secondOptions = listOf(1, 3, 5, 10, 15, 30, 60),
                 frameOptions = listOf(1, 5, 10, 15, 30, 60, 120),
-                onUnitChange = { unit -> onUpdate { it.copy(seekMoveUnit = unit) } },
-                onSecondsChange = { sec -> onUpdate { it.copy(seekMoveSeconds = sec) } },
-                onFramesChange = { fr -> onUpdate { it.copy(seekMoveFrames = fr) } },
+                onUnitChange = { unit -> onUpdate { it.copy(buttonSeekUnit = unit) } },
+                onSecondsChange = { sec -> onUpdate { it.copy(buttonSeekSeconds = sec) } },
+                onFramesChange = { fr -> onUpdate { it.copy(buttonSeekFrames = fr) } },
             )
 
             HorizontalDivider()

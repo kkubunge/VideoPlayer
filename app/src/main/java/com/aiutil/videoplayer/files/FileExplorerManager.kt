@@ -65,9 +65,20 @@ object FileExplorerManager {
     private fun entryComparator(sortOrder: SortOrder): Comparator<ExplorerEntry> = when (sortOrder) {
         SortOrder.NAME_ASC -> compareBy { it.name.lowercase(Locale.getDefault()) }
         SortOrder.NAME_DESC -> compareByDescending { it.name.lowercase(Locale.getDefault()) }
-        SortOrder.DATE_DESC -> compareByDescending { it.lastModifiedMs }
-        SortOrder.SIZE_DESC -> compareByDescending { it.sizeBytes }
-        SortOrder.DURATION_DESC -> compareByDescending { it.videoItem?.durationMs ?: 0L }
+        SortOrder.DATE_DESC -> compareByDescending<ExplorerEntry> { it.lastModifiedMs }
+            .thenBy { it.name.lowercase(Locale.getDefault()) }
+        SortOrder.DATE_ASC -> compareBy<ExplorerEntry> { it.lastModifiedMs }
+            .thenBy { it.name.lowercase(Locale.getDefault()) }
+        SortOrder.SIZE_DESC -> compareByDescending<ExplorerEntry> { it.sizeBytes }
+            .thenBy { it.name.lowercase(Locale.getDefault()) }
+        SortOrder.SIZE_ASC -> compareBy<ExplorerEntry> { it.sizeBytes }
+            .thenBy { it.name.lowercase(Locale.getDefault()) }
+        SortOrder.DURATION_DESC -> compareByDescending<ExplorerEntry> {
+            if (it.isVideo) (it.videoItem?.durationMs ?: 0L) else -1L
+        }.thenBy { it.name.lowercase(Locale.getDefault()) }
+        SortOrder.DURATION_ASC -> compareBy<ExplorerEntry> {
+            if (it.isVideo) (it.videoItem?.durationMs ?: 0L) else Long.MAX_VALUE
+        }.thenBy { it.name.lowercase(Locale.getDefault()) }
     }
 
     fun createFolder(parentDir: File, name: String): Result<File> = runCatching {

@@ -59,6 +59,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -417,7 +418,10 @@ fun ExplorerScreen(
                                 expanded = sortMenuExpanded,
                                 onDismissRequest = { sortMenuExpanded = false },
                             ) {
-                                SortOrder.entries.forEach { order ->
+                                SortOrder.entries.forEachIndexed { idx, order ->
+                                    if (idx > 0 && idx % 2 == 0) {
+                                        HorizontalDivider()
+                                    }
                                     DropdownMenuItem(
                                         text = {
                                             Text(

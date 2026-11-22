@@ -158,17 +158,14 @@ class GestureMathTest {
     }
 
     @Test
-    fun `horizontal seek delta respects seconds and frames unit settings`() {
+    fun `horizontal seek delta uses seconds only independently of button unit`() {
         // viewWidth = 1000 -> effectiveWidth = 800
         // 초 단위(30초 설정): 800px 드래그 시 +30,000ms, -400px 드래그 시 -15,000ms
         val secForward = GestureMath.computeHorizontalSeekDeltaMs(
             deltaX = 800f,
             viewWidth = 1000f,
             durationMs = 600_000L,
-            unit = SeekUnit.SECONDS,
             seekSeconds = 30,
-            seekFrames = 30,
-            fps = 30f,
         )
         assertEquals(30_000L, secForward)
 
@@ -176,23 +173,61 @@ class GestureMathTest {
             deltaX = -400f,
             viewWidth = 1000f,
             durationMs = 600_000L,
-            unit = SeekUnit.SECONDS,
             seekSeconds = 30,
-            seekFrames = 30,
-            fps = 30f,
         )
         assertEquals(-15_000L, secBackward)
 
-        // 프레임 단위(30fps, 30프레임 설정 -> spanMs = 1000ms): 800px 드래그 시 +1000ms, 400px 시 +500ms
-        val frameForward = GestureMath.computeHorizontalSeekDeltaMs(
+        val customSec = GestureMath.computeHorizontalSeekDeltaMs(
             deltaX = 400f,
             viewWidth = 1000f,
             durationMs = 600_000L,
-            unit = SeekUnit.FRAMES,
-            seekSeconds = 30,
-            seekFrames = 30,
-            fps = 30f,
+            seekSeconds = 60,
         )
-        assertEquals(500L, frameForward)
+        assertEquals(30_000L, customSec)
+    }
+
+    @Test
+    fun `step button delta respects seconds and frames unit settings independently`() {
+        assertEquals(
+            5_000L,
+            GestureMath.computeStepButtonDeltaMs(
+                forward = true,
+                unit = SeekUnit.SECONDS,
+                seconds = 5,
+                frames = 10,
+                fps = 30f,
+            ),
+        )
+        assertEquals(
+            -5_000L,
+            GestureMath.computeStepButtonDeltaMs(
+                forward = false,
+                unit = SeekUnit.SECONDS,
+                seconds = 5,
+                frames = 10,
+                fps = 30f,
+            ),
+        )
+        // 30fps 에서 15프레임 = 500ms, 1프레임 = 33ms
+        assertEquals(
+            500L,
+            GestureMath.computeStepButtonDeltaMs(
+                forward = true,
+                unit = SeekUnit.FRAMES,
+                seconds = 5,
+                frames = 15,
+                fps = 30f,
+            ),
+        )
+        assertEquals(
+            -33L,
+            GestureMath.computeStepButtonDeltaMs(
+                forward = false,
+                unit = SeekUnit.FRAMES,
+                seconds = 5,
+                frames = 1,
+                fps = 30f,
+            ),
+        )
     }
 }

@@ -31,9 +31,12 @@ enum class TranslationEngineMode(val label: String) {
 enum class SortOrder(val label: String) {
     NAME_ASC("이름 오름차순"),
     NAME_DESC("이름 내림차순"),
-    DATE_DESC("최신순"),
-    SIZE_DESC("용량 큰 순"),
-    DURATION_DESC("재생시간 긴 순"),
+    DATE_DESC("날짜 내림차순 (최신순)"),
+    DATE_ASC("날짜 오름차순 (오래된 순)"),
+    SIZE_DESC("용량 내림차순 (큰 순)"),
+    SIZE_ASC("용량 오름차순 (작은 순)"),
+    DURATION_DESC("재생시간 내림차순 (긴 순)"),
+    DURATION_ASC("재생시간 오름차순 (짧은 순)"),
 }
 
 enum class ExplorerTab(val label: String) {
@@ -110,9 +113,10 @@ data class PlayerSettings(
     val doubleTapUnit: SeekUnit = SeekUnit.SECONDS,
     val doubleTapSeconds: Int = 10,
     val doubleTapFrames: Int = 10,
-    val seekMoveUnit: SeekUnit = SeekUnit.SECONDS,
-    val seekMoveSeconds: Int = 30,
-    val seekMoveFrames: Int = 30,
+    val dragSeekSeconds: Int = 30,
+    val buttonSeekUnit: SeekUnit = SeekUnit.FRAMES,
+    val buttonSeekSeconds: Int = 5,
+    val buttonSeekFrames: Int = 1,
     val defaultFps: Float = 30f,
     val resetSpeedOnLongPressRelease: Boolean = false,
     val resumePlayback: Boolean = true,

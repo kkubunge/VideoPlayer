@@ -196,9 +196,30 @@ object VideoScanner {
         return when (sortOrder) {
             SortOrder.NAME_ASC -> folders.sortedBy { it.name.lowercase(Locale.getDefault()) }
             SortOrder.NAME_DESC -> folders.sortedByDescending { it.name.lowercase(Locale.getDefault()) }
-            SortOrder.DATE_DESC -> folders.sortedByDescending { it.lastModifiedSec }
-            SortOrder.SIZE_DESC -> folders.sortedByDescending { it.totalSizeBytes }
-            SortOrder.DURATION_DESC -> folders.sortedByDescending { it.videos.sumOf { v -> v.durationMs } }
+            SortOrder.DATE_DESC -> folders.sortedWith(
+                compareByDescending<VideoFolder> { it.lastModifiedSec }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.DATE_ASC -> folders.sortedWith(
+                compareBy<VideoFolder> { it.lastModifiedSec }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.SIZE_DESC -> folders.sortedWith(
+                compareByDescending<VideoFolder> { it.totalSizeBytes }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.SIZE_ASC -> folders.sortedWith(
+                compareBy<VideoFolder> { it.totalSizeBytes }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.DURATION_DESC -> folders.sortedWith(
+                compareByDescending<VideoFolder> { it.videos.sumOf { v -> v.durationMs } }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.DURATION_ASC -> folders.sortedWith(
+                compareBy<VideoFolder> { it.videos.sumOf { v -> v.durationMs } }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) }
+            )
         }
     }
 
@@ -206,9 +227,30 @@ object VideoScanner {
         return when (sortOrder) {
             SortOrder.NAME_ASC -> videos.sortedBy { it.title.lowercase(Locale.getDefault()) }
             SortOrder.NAME_DESC -> videos.sortedByDescending { it.title.lowercase(Locale.getDefault()) }
-            SortOrder.DATE_DESC -> videos.sortedByDescending { it.dateModifiedSec }
-            SortOrder.SIZE_DESC -> videos.sortedByDescending { it.sizeBytes }
-            SortOrder.DURATION_DESC -> videos.sortedByDescending { it.durationMs }
+            SortOrder.DATE_DESC -> videos.sortedWith(
+                compareByDescending<VideoItem> { it.dateModifiedSec }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.DATE_ASC -> videos.sortedWith(
+                compareBy<VideoItem> { it.dateModifiedSec }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.SIZE_DESC -> videos.sortedWith(
+                compareByDescending<VideoItem> { it.sizeBytes }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.SIZE_ASC -> videos.sortedWith(
+                compareBy<VideoItem> { it.sizeBytes }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.DURATION_DESC -> videos.sortedWith(
+                compareByDescending<VideoItem> { it.durationMs }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) }
+            )
+            SortOrder.DURATION_ASC -> videos.sortedWith(
+                compareBy<VideoItem> { it.durationMs }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) }
+            )
         }
     }
 
