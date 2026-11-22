@@ -126,6 +126,7 @@ data class PlayerSettings(
     val defaultFps: Float = 30f,
     val resetSpeedOnLongPressRelease: Boolean = false,
     val resumePlayback: Boolean = true,
+    val backgroundPlayOnScreenLock: Boolean = false,
     val aiTranslateEnabled: Boolean = false,
     val targetLangCode: String = "ko",
     val dualSubtitles: Boolean = true,

@@ -144,8 +144,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
@@ -168,6 +173,9 @@ import com.aiutil.videoplayer.model.SupportedLanguages
 import com.aiutil.videoplayer.model.TrackOption
 import com.aiutil.videoplayer.model.VideoItem
 import com.aiutil.videoplayer.model.VideoScaleMode
+import com.aiutil.videoplayer.player.BackgroundPlaybackBridge
+import com.aiutil.videoplayer.player.BackgroundPlaybackPolicy
+import com.aiutil.videoplayer.player.BackgroundPlaybackService
 import com.aiutil.videoplayer.util.Format
 import com.aiutil.videoplayer.util.GestureMath
 import kotlinx.coroutines.Dispatchers
@@ -235,12 +243,24 @@ fun PlayerScreen(
 
     // 플레이어 인스턴스 & AI 자막 컨트롤러
     val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setSeekParameters(SeekParameters.EXACT)
-            playWhenReady = true
-        }
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.CONTENT_TYPE_MOVIE)
+            .build()
+        ExoPlayer.Builder(context)
+            .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
+            .build().apply {
+                setSeekParameters(SeekParameters.EXACT)
+                playWhenReady = true
+            }
     }
     val subtitleController = remember { AiSubtitleController(context, scope) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestIsInPipMode by rememberUpdatedState(isInPipMode)
+    var hasStartedBackgroundSession by remember { mutableStateOf(false) }
+    var lastLoadedVideoKey by remember { mutableStateOf<String?>(null) }
 
     // 재생 상태
     var isPlaying by remember { mutableStateOf(true) }
@@ -352,12 +372,91 @@ fun PlayerScreen(
         App.history.recordProgress(currentVideo, pos, dur)
     }
 
+    fun loadVideo(video: VideoItem, index: Int) {
+        val key = "${video.id}|${video.uri}"
+        if (lastLoadedVideoKey == key) return
+        lastLoadedVideoKey = key
+
+        val mediaUri = if (video.path.isNotBlank() && File(video.path).canRead()) {
+            Uri.fromFile(File(video.path))
+        } else {
+            Uri.parse(video.uri)
+        }
+        val mediaItem = MediaItem.Builder()
+            .setUri(mediaUri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(video.title)
+                    .setArtist(video.folderName)
+                    .build()
+            )
+            .build()
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+        val bookmarkTarget = pendingInitialSeek
+        if (bookmarkTarget != null && bookmarkTarget > 0L) {
+            pendingInitialSeek = null
+            exoPlayer.seekTo(bookmarkTarget)
+            Toast.makeText(
+                context,
+                "북마크 위치 (${Format.duration(bookmarkTarget)})",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else if (latestSettings.resumePlayback) {
+            val savedPos = App.history.getSavedPosition(video.id)
+            if (savedPos > 1_500L) {
+                exoPlayer.seekTo(savedPos)
+                Toast.makeText(
+                    context,
+                    "이어보기 (${Format.duration(savedPos)})",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        exoPlayer.setPlaybackSpeed(playbackSpeed)
+        exoPlayer.play()
+        subtitleController.loadForVideo(video, latestSettings)
+
+        val metaSubtitle = buildString {
+            if (video.folderName.isNotBlank()) append(video.folderName)
+            if (playlist.size > 1) {
+                if (isNotEmpty()) append(" · ")
+                append("${index + 1}/${playlist.size}")
+            }
+        }
+        BackgroundPlaybackBridge.updateMetadata(
+            BackgroundPlaybackBridge.PlaybackMetadata(
+                title = video.title,
+                subtitle = metaSubtitle,
+                hasPrevious = index > 0,
+                hasNext = index + 1 < playlist.size,
+            )
+        )
+        if (latestSettings.backgroundPlayOnScreenLock) {
+            hasStartedBackgroundSession = true
+            BackgroundPlaybackService.startOrUpdate(context)
+        }
+    }
+
     fun goToVideo(index: Int) {
         if (index !in playlist.indices) return
         saveCurrentProgress()
         repeatA = null
         repeatB = null
         currentIndex = index
+        // 화면 OFF(ON_STOP) 상태에서는 Compose LaunchedEffect가 중단되므로 즉시 새 영상을 로드한다.
+        loadVideo(playlist[index], index)
+    }
+
+    val latestSaveProgress by rememberUpdatedState { saveCurrentProgress() }
+    val latestGoToVideo by rememberUpdatedState<(Int) -> Unit> { idx -> goToVideo(idx) }
+    val latestAdvanceNextOrShowControls by rememberUpdatedState {
+        saveCurrentProgress()
+        if (currentIndex + 1 < playlist.size) {
+            goToVideo(currentIndex + 1)
+        } else {
+            controlsVisible = true
+        }
     }
 
     fun handleDoubleTap(tapX: Float, width: Float, effectiveFps: Float) {
@@ -470,22 +569,124 @@ fun PlayerScreen(
         }
     }
 
-    // 몰입형 전체 화면 & 화면 켜짐 유지
+    // 몰입형 전체 화면 & 종료 정리
     DisposableEffect(activity, view) {
         val window = activity?.window
         val insetsController = window?.let { WindowCompat.getInsetsController(it, view) }
-        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         insetsController?.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         insetsController?.hide(WindowInsetsCompat.Type.systemBars())
 
         onDispose {
-            saveCurrentProgress()
+            latestSaveProgress()
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             insetsController?.show(WindowInsetsCompat.Type.systemBars())
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            BackgroundPlaybackBridge.clear(exoPlayer)
+            BackgroundPlaybackService.stop(context)
             subtitleController.release()
             exoPlayer.release()
+        }
+    }
+
+    // 재생 중일 때만 화면 켜짐 유지
+    LaunchedEffect(isPlaying) {
+        val window = activity?.window
+        if (BackgroundPlaybackPolicy.shouldKeepScreenOn(isPlaying)) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // 화면 OFF / 백그라운드 전환 시 설정에 따라 재생 유지 또는 자동 일시정지
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (BackgroundPlaybackPolicy.shouldPauseOnStop(
+                            backgroundPlayEnabled = latestSettings.backgroundPlayOnScreenLock,
+                            isInPipMode = latestIsInPipMode,
+                            isPlaying = exoPlayer.isPlaying,
+                        )
+                    ) {
+                        exoPlayer.pause()
+                        latestSaveProgress()
+                    } else if (latestSettings.backgroundPlayOnScreenLock) {
+                        latestSaveProgress()
+                        if (exoPlayer.isPlaying) {
+                            BackgroundPlaybackService.startOrUpdate(context)
+                        }
+                    }
+                }
+
+                Lifecycle.Event.ON_START -> {
+                    positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    isPlaying = exoPlayer.isPlaying
+                }
+
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // 백그라운드 재생 브리지 및 포그라운드 서비스 동기화
+    LaunchedEffect(
+        currentVideo.id,
+        currentIndex,
+        playlist.size,
+        settings.backgroundPlayOnScreenLock,
+        hasStartedBackgroundSession,
+    ) {
+        val subtitle = buildString {
+            if (currentVideo.folderName.isNotBlank()) append(currentVideo.folderName)
+            if (playlist.size > 1) {
+                if (isNotEmpty()) append(" · ")
+                append("${currentIndex + 1}/${playlist.size}")
+            }
+        }
+        val meta = BackgroundPlaybackBridge.PlaybackMetadata(
+            title = currentVideo.title,
+            subtitle = subtitle,
+            hasPrevious = currentIndex > 0,
+            hasNext = currentIndex + 1 < playlist.size,
+        )
+        BackgroundPlaybackBridge.attach(
+            player = exoPlayer,
+            metadata = meta,
+            onPrevious = {
+                GestureMath.computeAdjacentVideoIndex(
+                    currentIndex = currentIndex,
+                    playlistSize = playlist.size,
+                    isNext = false,
+                )?.let { latestGoToVideo(it) }
+            },
+            onNext = {
+                GestureMath.computeAdjacentVideoIndex(
+                    currentIndex = currentIndex,
+                    playlistSize = playlist.size,
+                    isNext = true,
+                )?.let { latestGoToVideo(it) }
+            },
+            onTogglePlay = {
+                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+            },
+            onStopBackground = {
+                if (exoPlayer.isPlaying) exoPlayer.pause()
+                hasStartedBackgroundSession = false
+            },
+        )
+        if (BackgroundPlaybackPolicy.shouldRunForegroundService(
+                backgroundPlayEnabled = settings.backgroundPlayOnScreenLock,
+                hasStartedPlayback = hasStartedBackgroundSession,
+                isExiting = false,
+            )
+        ) {
+            BackgroundPlaybackService.startOrUpdate(context)
+        } else {
+            BackgroundPlaybackService.stop(context)
         }
     }
 
@@ -503,6 +704,10 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                if (playing && latestSettings.backgroundPlayOnScreenLock) {
+                    hasStartedBackgroundSession = true
+                    BackgroundPlaybackService.startOrUpdate(context)
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -514,12 +719,7 @@ fun PlayerScreen(
                         videoFps = fmtFps
                     }
                 } else if (playbackState == Player.STATE_ENDED) {
-                    saveCurrentProgress()
-                    if (currentIndex + 1 < playlist.size) {
-                        goToVideo(currentIndex + 1)
-                    } else {
-                        controlsVisible = true
-                    }
+                    latestAdvanceNextOrShowControls()
                 }
             }
 
@@ -576,36 +776,7 @@ fun PlayerScreen(
 
     // 현재 동영상 로드 + 이어보기 + 자막 로드
     LaunchedEffect(currentVideo.id, currentVideo.uri) {
-        val mediaUri = if (currentVideo.path.isNotBlank() && File(currentVideo.path).canRead()) {
-            Uri.fromFile(File(currentVideo.path))
-        } else {
-            Uri.parse(currentVideo.uri)
-        }
-        exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
-        exoPlayer.prepare()
-        val bookmarkTarget = pendingInitialSeek
-        if (bookmarkTarget != null && bookmarkTarget > 0L) {
-            pendingInitialSeek = null
-            exoPlayer.seekTo(bookmarkTarget)
-            Toast.makeText(
-                context,
-                "북마크 위치 (${Format.duration(bookmarkTarget)})",
-                Toast.LENGTH_SHORT
-            ).show()
-        } else if (latestSettings.resumePlayback) {
-            val savedPos = App.history.getSavedPosition(currentVideo.id)
-            if (savedPos > 1_500L) {
-                exoPlayer.seekTo(savedPos)
-                Toast.makeText(
-                    context,
-                    "이어보기 (${Format.duration(savedPos)})",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
-        exoPlayer.setPlaybackSpeed(playbackSpeed)
-        exoPlayer.play()
-        subtitleController.loadForVideo(currentVideo, latestSettings)
+        loadVideo(currentVideo, currentIndex)
     }
 
     // AI 설정 변경 시 번역 갱신
@@ -1336,6 +1507,10 @@ fun PlayerScreen(
                                 if (isNotEmpty()) append(" · ")
                                 append(if (repeatB == null) "구간A" else "구간반복")
                             }
+                            if (settings.backgroundPlayOnScreenLock) {
+                                if (isNotEmpty()) append(" · ")
+                                append("백그라운드")
+                            }
                             if (sleepRemainingSec != null) {
                                 if (isNotEmpty()) append(" · ")
                                 append("${sleepRemainingSec!! / 60}분")
@@ -1510,6 +1685,36 @@ fun PlayerScreen(
                                 text = { Text("PIP 팝업 창 모드") },
                                 leadingIcon = { Icon(Icons.Default.PictureInPictureAlt, null) },
                                 onClick = { showMoreMenu = false; enterPip() },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (settings.backgroundPlayOnScreenLock) {
+                                            "화면 잠금 시 백그라운드 재생 (켜짐)"
+                                        } else {
+                                            "화면 잠금 시 백그라운드 재생 (꺼짐)"
+                                        }
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.VolumeUp, null) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    val next = !settings.backgroundPlayOnScreenLock
+                                    if (next) {
+                                        BackgroundPlaybackService.requestNotificationPermissionIfNeeded(context)
+                                        if (exoPlayer.isPlaying) {
+                                            hasStartedBackgroundSession = true
+                                        }
+                                    } else {
+                                        hasStartedBackgroundSession = false
+                                    }
+                                    App.settings.update { it.copy(backgroundPlayOnScreenLock = next) }
+                                    Toast.makeText(
+                                        context,
+                                        if (next) "화면 잠금 시 백그라운드 재생 켜짐" else "화면 잠금 시 백그라운드 재생 꺼짐",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
                             )
                             DropdownMenuItem(
                                 text = {

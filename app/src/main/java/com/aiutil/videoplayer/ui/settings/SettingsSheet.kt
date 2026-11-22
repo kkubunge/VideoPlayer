@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -38,6 +39,7 @@ import com.aiutil.videoplayer.model.PlayerSettings
 import com.aiutil.videoplayer.model.SeekUnit
 import com.aiutil.videoplayer.model.SupportedLanguages
 import com.aiutil.videoplayer.model.TranslationEngineMode
+import com.aiutil.videoplayer.player.BackgroundPlaybackService
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,6 +50,7 @@ fun PlayerSettingsSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
     var showApiKey by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
@@ -212,6 +215,18 @@ fun PlayerSettingsSheet(
                 subtitle = "동영상 재실행 시 마지막 시청 지점부터 재생합니다.",
                 checked = settings.resumePlayback,
                 onCheckedChange = { checked -> onUpdate { it.copy(resumePlayback = checked) } },
+            )
+
+            SettingsSwitchRow(
+                title = "화면 잠금 시 백그라운드 재생",
+                subtitle = "화면을 끄거나 앱을 내려도 소리가 계속 재생되며 잠금화면·알림창에서 제어할 수 있습니다.",
+                checked = settings.backgroundPlayOnScreenLock,
+                onCheckedChange = { checked ->
+                    if (checked) {
+                        BackgroundPlaybackService.requestNotificationPermissionIfNeeded(context)
+                    }
+                    onUpdate { it.copy(backgroundPlayOnScreenLock = checked) }
+                },
             )
 
             SettingsSwitchRow(
