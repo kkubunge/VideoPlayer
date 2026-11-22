@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -211,6 +212,12 @@ private data class DoubleTapFeedback(
     val isFileSwitch: Boolean = false,
 )
 
+private data class CornerNotice(
+    val message: String,
+    val token: Long,
+    val durationMs: Long = 1_800L,
+)
+
 @OptIn(UnstableApi::class)
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -296,9 +303,10 @@ fun PlayerScreen(
         )
     }
 
-    // HUD / 더블터치 피드백
+    // HUD / 더블터치 피드백 / 우측 상단 구석 안내 배지
     var hudState by remember { mutableStateOf<HudOverlayState?>(null) }
     var doubleTapFeedback by remember { mutableStateOf<DoubleTapFeedback?>(null) }
+    var cornerNotice by remember { mutableStateOf<CornerNotice?>(null) }
     var containerSize by remember { mutableStateOf(IntSize(1080, 1920)) }
 
     // A-B 구간 반복
@@ -366,6 +374,14 @@ fun PlayerScreen(
         exoPlayer.setPlaybackSpeed(clamped)
     }
 
+    fun showNotice(message: String, longDuration: Boolean = false) {
+        cornerNotice = CornerNotice(
+            message = message,
+            token = SystemClock.uptimeMillis(),
+            durationMs = if (longDuration) 2_800L else 1_800L,
+        )
+    }
+
     fun saveCurrentProgress() {
         val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
         val dur = exoPlayer.duration.takeIf { it > 0L } ?: currentVideo.durationMs
@@ -397,20 +413,12 @@ fun PlayerScreen(
         if (bookmarkTarget != null && bookmarkTarget > 0L) {
             pendingInitialSeek = null
             exoPlayer.seekTo(bookmarkTarget)
-            Toast.makeText(
-                context,
-                "북마크 위치 (${Format.duration(bookmarkTarget)})",
-                Toast.LENGTH_SHORT
-            ).show()
+            showNotice("북마크 위치 (${Format.duration(bookmarkTarget)})")
         } else if (latestSettings.resumePlayback) {
             val savedPos = App.history.getSavedPosition(video.id)
             if (savedPos > 1_500L) {
                 exoPlayer.seekTo(savedPos)
-                Toast.makeText(
-                    context,
-                    "이어보기 (${Format.duration(savedPos)})",
-                    Toast.LENGTH_SHORT
-                ).show()
+                showNotice("이어보기 (${Format.duration(savedPos)})")
             }
         }
         exoPlayer.setPlaybackSpeed(playbackSpeed)
@@ -565,7 +573,7 @@ fun PlayerScreen(
                 .build()
             runCatching { activity.enterPictureInPictureMode(params) }
         } else {
-            Toast.makeText(context, "이 기기에서는 PIP 모드를 지원하지 않습니다.", Toast.LENGTH_SHORT).show()
+            showNotice("이 기기에서는 PIP 모드를 지원하지 않습니다.")
         }
     }
 
@@ -828,7 +836,7 @@ fun PlayerScreen(
         if (rem <= 0) {
             exoPlayer.pause()
             sleepRemainingSec = null
-            Toast.makeText(context, "취침 타이머로 재생이 일시정지되었습니다.", Toast.LENGTH_SHORT).show()
+            showNotice("취침 타이머로 재생이 일시정지되었습니다.")
         } else {
             delay(1000L)
             sleepRemainingSec = rem - 1
@@ -848,6 +856,15 @@ fun PlayerScreen(
         if (doubleTapFeedback != null) {
             delay(750L)
             doubleTapFeedback = null
+        }
+    }
+
+    // 우측 상단 구석 안내 배지 자동 소멸
+    LaunchedEffect(cornerNotice?.token) {
+        val notice = cornerNotice ?: return@LaunchedEffect
+        delay(notice.durationMs)
+        if (cornerNotice?.token == notice.token) {
+            cornerNotice = null
         }
     }
 
@@ -871,7 +888,7 @@ fun PlayerScreen(
             }
             isLocked -> {
                 controlsVisible = true
-                Toast.makeText(context, "화면 잠금을 먼저 해제해 주세요.", Toast.LENGTH_SHORT).show()
+                showNotice("화면 잠금을 먼저 해제해 주세요.")
             }
             else -> onExit()
         }
@@ -1311,27 +1328,63 @@ fun PlayerScreen(
                     }
                 }
             }
-            // 컨트롤 바가 숨겨졌을 때 AI 인식/번역 중 상태만 우측 상단 구석에 작게 표시
-            if (!controlsVisible &&
-                !isInPipMode &&
-                !showTrimSheet &&
-                settings.aiTranslateEnabled &&
-                subtitleStatus.contains("중")
+        }
+
+        // 3-1. 우측 상단 구석 상태 & 안내 배지 (가로보기·이어보기·화면비율 등 안내 + AI 번역 중 상태)
+        val showCornerAiBadge = subtitlesVisible &&
+            !controlsVisible &&
+            !isInPipMode &&
+            !showTrimSheet &&
+            settings.aiTranslateEnabled &&
+            subtitleStatus.contains("중")
+        val notice = cornerNotice
+        if (!isInPipMode && (showCornerAiBadge || notice != null)) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(
+                        top = if (controlsVisible && !isLocked && !showTrimSheet) 52.dp else 10.dp,
+                        end = 12.dp,
+                    ),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(top = 8.dp, end = 10.dp),
-                    color = Color.Black.copy(alpha = 0.32f),
-                    shape = RoundedCornerShape(10.dp),
+                if (showCornerAiBadge) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.32f),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text(
+                            text = subtitleStatus,
+                            color = Color.White.copy(alpha = 0.78f),
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+                AnimatedVisibility(
+                    visible = notice != null,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
                 ) {
-                    Text(
-                        text = subtitleStatus,
-                        color = Color.White.copy(alpha = 0.78f),
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    )
+                    if (notice != null) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.56f),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.widthIn(max = 260.dp),
+                        ) {
+                            Text(
+                                text = notice.message,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1662,21 +1715,21 @@ fun PlayerScreen(
                                     when {
                                         repeatA == null -> {
                                             repeatA = now
-                                            Toast.makeText(context, "반복 시작점(A) 설정", Toast.LENGTH_SHORT).show()
+                                            showNotice("반복 시작점(A) 설정")
                                         }
                                         repeatB == null -> {
                                             if (now > repeatA!! + 300L) {
                                                 repeatB = now
                                                 exoPlayer.seekTo(repeatA!!)
-                                                Toast.makeText(context, "구간 반복 시작", Toast.LENGTH_SHORT).show()
+                                                showNotice("구간 반복 시작")
                                             } else {
-                                                Toast.makeText(context, "A 이후 지점에서 B를 눌러주세요.", Toast.LENGTH_SHORT).show()
+                                                showNotice("A 이후 지점에서 B를 눌러주세요.")
                                             }
                                         }
                                         else -> {
                                             repeatA = null
                                             repeatB = null
-                                            Toast.makeText(context, "구간 반복 해제", Toast.LENGTH_SHORT).show()
+                                            showNotice("구간 반복 해제")
                                         }
                                     }
                                 },
@@ -1709,11 +1762,9 @@ fun PlayerScreen(
                                         hasStartedBackgroundSession = false
                                     }
                                     App.settings.update { it.copy(backgroundPlayOnScreenLock = next) }
-                                    Toast.makeText(
-                                        context,
-                                        if (next) "화면 잠금 시 백그라운드 재생 켜짐" else "화면 잠금 시 백그라운드 재생 꺼짐",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
+                                    showNotice(
+                                        if (next) "화면 잠금 시 백그라운드 재생 켜짐" else "화면 잠금 시 백그라운드 재생 꺼짐"
+                                    )
                                 },
                             )
                             DropdownMenuItem(
@@ -1838,7 +1889,7 @@ fun PlayerScreen(
                                     (orientationMode.ordinal + 1) % ScreenOrientationMode.entries.size
                                 ]
                                 orientationMode = next
-                                Toast.makeText(context, next.label, Toast.LENGTH_SHORT).show()
+                                showNotice(next.label)
                             },
                             modifier = Modifier.size(34.dp),
                         ) {
@@ -1931,11 +1982,11 @@ fun PlayerScreen(
                             onClick = {
                                 if (abs(zoomScale - 1.0f) > 0.05f) {
                                     zoomScale = 1.0f
-                                    Toast.makeText(context, "화면 크기 100% 초기화 (${scaleMode.label})", Toast.LENGTH_SHORT).show()
+                                    showNotice("화면 크기 100% 초기화 (${scaleMode.label})")
                                 } else {
                                     val next = VideoScaleMode.entries[(scaleMode.ordinal + 1) % VideoScaleMode.entries.size]
                                     scaleMode = next
-                                    Toast.makeText(context, "화면 비율: ${next.label}", Toast.LENGTH_SHORT).show()
+                                    showNotice("화면 비율: ${next.label}")
                                 }
                             },
                             modifier = Modifier.size(34.dp),
@@ -2316,17 +2367,9 @@ fun PlayerScreen(
                                     res.onSuccess { outFile ->
                                         lastSavedClip = outFile
                                         onDeletedVideo(currentVideo.id)
-                                        Toast.makeText(
-                                            context,
-                                            "잘라내기 완료: ${outFile.name}",
-                                            Toast.LENGTH_LONG
-                                        ).show()
+                                        showNotice("잘라내기 완료: ${outFile.name}", longDuration = true)
                                     }.onFailure { err ->
-                                        Toast.makeText(
-                                            context,
-                                            err.message ?: "잘라내기에 실패했습니다.",
-                                            Toast.LENGTH_LONG
-                                        ).show()
+                                        showNotice(err.message ?: "잘라내기에 실패했습니다.", longDuration = true)
                                     }
                                 }
                             },
@@ -2371,20 +2414,17 @@ fun PlayerScreen(
                                 App.history.removeByPathOrId(targetToDelete.id)
                                 App.bookmarks.removeForDeletedPath(targetToDelete.id)
                                 onDeletedVideo(targetToDelete.id)
-                                Toast.makeText(context, "동영상을 삭제했습니다.", Toast.LENGTH_SHORT).show()
                                 val updatedList = playlist.filterNot { it.id == targetToDelete.id }
                                 if (updatedList.isEmpty()) {
+                                    Toast.makeText(context, "동영상을 삭제했습니다.", Toast.LENGTH_SHORT).show()
                                     onExit()
                                 } else {
+                                    showNotice("동영상을 삭제했습니다.")
                                     playlist = updatedList
                                     currentIndex = currentIndex.coerceIn(0, updatedList.lastIndex)
                                 }
                             }.onFailure { err ->
-                                Toast.makeText(
-                                    context,
-                                    err.message ?: "삭제하지 못했습니다.",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                showNotice(err.message ?: "삭제하지 못했습니다.", longDuration = true)
                             }
                         }
                     },
@@ -2685,7 +2725,7 @@ fun PlayerScreen(
                             onClick = {
                                 sleepRemainingSec = min * 60
                                 showSleepDialog = false
-                                Toast.makeText(context, "${min}분 후 정지됩니다.", Toast.LENGTH_SHORT).show()
+                                showNotice("${min}분 후 정지됩니다.")
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
