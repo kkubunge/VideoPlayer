@@ -93,6 +93,17 @@ object GestureMath {
         return if (isRightSide) magnitudeMs else -magnitudeMs
     }
 
+    /** 이전/다음 파일 이동 시 대상 인덱스 계산 (이동 불가능한 경계면 null 반환). */
+    fun computeAdjacentVideoIndex(
+        currentIndex: Int,
+        playlistSize: Int,
+        isNext: Boolean,
+    ): Int? {
+        if (playlistSize <= 0 || currentIndex !in 0 until playlistSize) return null
+        val target = if (isNext) currentIndex + 1 else currentIndex - 1
+        return target.takeIf { it in 0 until playlistSize }
+    }
+
     fun msToFrames(ms: Long, fps: Float): Long {
         val effectiveFps = if (fps in 1f..240f) fps else 30f
         return ((ms / 1000.0) * effectiveFps).roundToLong()

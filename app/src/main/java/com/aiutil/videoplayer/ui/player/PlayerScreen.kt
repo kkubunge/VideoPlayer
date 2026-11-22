@@ -160,6 +160,7 @@ import com.aiutil.videoplayer.ai.AiSubtitleController
 import com.aiutil.videoplayer.files.FileExplorerManager
 import com.aiutil.videoplayer.files.VideoScanner
 import com.aiutil.videoplayer.files.VideoTrimmer
+import com.aiutil.videoplayer.model.DoubleTapAction
 import com.aiutil.videoplayer.model.PlayerSettings
 import com.aiutil.videoplayer.model.ScreenOrientationMode
 import com.aiutil.videoplayer.model.SeekUnit
@@ -199,6 +200,7 @@ private data class DoubleTapFeedback(
     val isRightSide: Boolean,
     val label: String,
     val token: Long,
+    val isFileSwitch: Boolean = false,
 )
 
 @OptIn(UnstableApi::class)
@@ -356,6 +358,67 @@ fun PlayerScreen(
         repeatA = null
         repeatB = null
         currentIndex = index
+    }
+
+    fun handleDoubleTap(tapX: Float, width: Float, effectiveFps: Float) {
+        if (tapX in (width * 0.35f)..(width * 0.65f)) {
+            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+            return
+        }
+        val isRight = tapX > width * 0.5f
+        if (latestSettings.doubleTapAction == DoubleTapAction.PREV_NEXT_VIDEO) {
+            val targetIndex = GestureMath.computeAdjacentVideoIndex(
+                currentIndex = currentIndex,
+                playlistSize = playlist.size,
+                isNext = isRight,
+            )
+            val feedbackLabel = if (targetIndex != null) {
+                goToVideo(targetIndex)
+                if (isRight) "다음 파일" else "이전 파일"
+            } else {
+                if (isRight) "마지막 파일" else "첫 번째 파일"
+            }
+            doubleTapFeedback = DoubleTapFeedback(
+                isRightSide = isRight,
+                label = feedbackLabel,
+                token = SystemClock.uptimeMillis(),
+                isFileSwitch = true,
+            )
+            return
+        }
+        val deltaMs = GestureMath.computeDoubleTapDeltaMs(
+            isRightSide = isRight,
+            unit = latestSettings.doubleTapUnit,
+            seconds = latestSettings.doubleTapSeconds,
+            frames = latestSettings.doubleTapFrames,
+            fps = effectiveFps,
+        )
+        val dur = durationMs
+        val target = (exoPlayer.currentPosition + deltaMs).coerceIn(
+            0L,
+            if (dur > 0L) dur else Long.MAX_VALUE
+        )
+        exoPlayer.seekTo(target)
+        positionMs = target
+        val label = when (latestSettings.doubleTapUnit) {
+            SeekUnit.SECONDS -> {
+                if (isRight) "+${latestSettings.doubleTapSeconds}초"
+                else "-${latestSettings.doubleTapSeconds}초"
+            }
+            SeekUnit.FRAMES -> {
+                if (isRight) "+${latestSettings.doubleTapFrames}프레임"
+                else "-${latestSettings.doubleTapFrames}프레임"
+            }
+        }
+        doubleTapFeedback = DoubleTapFeedback(
+            isRightSide = isRight,
+            label = label,
+            token = SystemClock.uptimeMillis(),
+        )
+    }
+
+    val latestHandleDoubleTap by rememberUpdatedState<(Float, Float, Float) -> Unit> { tapX, w, fps ->
+        handleDoubleTap(tapX, w, fps)
     }
 
     fun stepByButton(forward: Boolean) {
@@ -1000,41 +1063,7 @@ fun PlayerScreen(
                                         if (isDoubleTapCandidate) {
                                             // 더블터치 확정!
                                             lastSingleTapJobPending = false
-                                            val tapX = pendingTapX
-                                            if (tapX in (width * 0.35f)..(width * 0.65f)) {
-                                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                                            } else {
-                                                val isRight = tapX > width * 0.5f
-                                                val deltaMs = GestureMath.computeDoubleTapDeltaMs(
-                                                    isRightSide = isRight,
-                                                    unit = latestSettings.doubleTapUnit,
-                                                    seconds = latestSettings.doubleTapSeconds,
-                                                    frames = latestSettings.doubleTapFrames,
-                                                    fps = effectiveFps,
-                                                )
-                                                val dur = latestDurationMs
-                                                val target = (exoPlayer.currentPosition + deltaMs).coerceIn(
-                                                    0L,
-                                                    if (dur > 0L) dur else Long.MAX_VALUE
-                                                )
-                                                exoPlayer.seekTo(target)
-                                                positionMs = target
-                                                val label = when (latestSettings.doubleTapUnit) {
-                                                    SeekUnit.SECONDS -> {
-                                                        if (isRight) "+${latestSettings.doubleTapSeconds}초"
-                                                        else "-${latestSettings.doubleTapSeconds}초"
-                                                    }
-                                                    SeekUnit.FRAMES -> {
-                                                        if (isRight) "+${latestSettings.doubleTapFrames}프레임"
-                                                        else "-${latestSettings.doubleTapFrames}프레임"
-                                                    }
-                                                }
-                                                doubleTapFeedback = DoubleTapFeedback(
-                                                    isRightSide = isRight,
-                                                    label = label,
-                                                    token = SystemClock.uptimeMillis(),
-                                                )
-                                            }
+                                            latestHandleDoubleTap(pendingTapX, width, effectiveFps)
                                         } else {
                                             // 싱글 탭 후보 -> 더블터치 윈도우 동안 다음 터치 대기
                                             lastSingleTapJobPending = true
@@ -1067,40 +1096,7 @@ fun PlayerScreen(
                                                     if (!ch.pressed) break
                                                 }
                                                 lastSingleTapJobPending = false
-                                                if (secondX in (width * 0.35f)..(width * 0.65f)) {
-                                                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                                                } else {
-                                                    val isRight = secondX > width * 0.5f
-                                                    val deltaMs = GestureMath.computeDoubleTapDeltaMs(
-                                                        isRightSide = isRight,
-                                                        unit = latestSettings.doubleTapUnit,
-                                                        seconds = latestSettings.doubleTapSeconds,
-                                                        frames = latestSettings.doubleTapFrames,
-                                                        fps = effectiveFps,
-                                                    )
-                                                    val dur = latestDurationMs
-                                                    val target = (exoPlayer.currentPosition + deltaMs).coerceIn(
-                                                        0L,
-                                                        if (dur > 0L) dur else Long.MAX_VALUE
-                                                    )
-                                                    exoPlayer.seekTo(target)
-                                                    positionMs = target
-                                                    val label = when (latestSettings.doubleTapUnit) {
-                                                        SeekUnit.SECONDS -> {
-                                                            if (isRight) "+${latestSettings.doubleTapSeconds}초"
-                                                            else "-${latestSettings.doubleTapSeconds}초"
-                                                        }
-                                                        SeekUnit.FRAMES -> {
-                                                            if (isRight) "+${latestSettings.doubleTapFrames}프레임"
-                                                            else "-${latestSettings.doubleTapFrames}프레임"
-                                                        }
-                                                    }
-                                                    doubleTapFeedback = DoubleTapFeedback(
-                                                        isRightSide = isRight,
-                                                        label = label,
-                                                        token = SystemClock.uptimeMillis(),
-                                                    )
-                                                }
+                                                latestHandleDoubleTap(secondX, width, effectiveFps)
                                             }
                                         }
                                     }
@@ -1185,7 +1181,12 @@ fun PlayerScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Icon(
-                        imageVector = if (dtf.isRightSide) Icons.Default.FastForward else Icons.Default.FastRewind,
+                        imageVector = when {
+                            dtf.isFileSwitch && dtf.isRightSide -> Icons.Default.SkipNext
+                            dtf.isFileSwitch -> Icons.Default.SkipPrevious
+                            dtf.isRightSide -> Icons.Default.FastForward
+                            else -> Icons.Default.FastRewind
+                        },
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(16.dp),

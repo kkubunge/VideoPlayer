@@ -7,6 +7,11 @@ enum class SeekUnit(val label: String) {
     FRAMES("프레임 단위"),
 }
 
+enum class DoubleTapAction(val label: String) {
+    SEEK("앞/뒤 시간·프레임 이동"),
+    PREV_NEXT_VIDEO("이전/다음 파일 이동"),
+}
+
 enum class ScreenOrientationMode(val label: String) {
     AUTO("자동 회전"),
     LANDSCAPE("가로 고정"),
@@ -110,6 +115,7 @@ data class TrackOption(
 
 @Serializable
 data class PlayerSettings(
+    val doubleTapAction: DoubleTapAction = DoubleTapAction.SEEK,
     val doubleTapUnit: SeekUnit = SeekUnit.SECONDS,
     val doubleTapSeconds: Int = 10,
     val doubleTapFrames: Int = 10,

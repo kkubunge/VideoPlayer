@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.aiutil.videoplayer.BuildConfig
+import com.aiutil.videoplayer.model.DoubleTapAction
 import com.aiutil.videoplayer.model.PlayerSettings
 import com.aiutil.videoplayer.model.SeekUnit
 import com.aiutil.videoplayer.model.SupportedLanguages
@@ -68,19 +69,90 @@ fun PlayerSettingsSheet(
 
             HorizontalDivider()
 
-            SeekStepSelector(
-                title = "더블터치 앞/뒤 이동 설정",
-                unit = settings.doubleTapUnit,
-                seconds = settings.doubleTapSeconds,
-                frames = settings.doubleTapFrames,
-                secondsLabelPrefix = "더블터치 이동 시간",
-                framesLabelPrefix = "더블터치 이동 프레임",
-                secondOptions = listOf(3, 5, 10, 15, 20, 30),
-                frameOptions = listOf(1, 5, 10, 15, 30, 60),
-                onUnitChange = { unit -> onUpdate { it.copy(doubleTapUnit = unit) } },
-                onSecondsChange = { sec -> onUpdate { it.copy(doubleTapSeconds = sec) } },
-                onFramesChange = { fr -> onUpdate { it.copy(doubleTapFrames = fr) } },
+            Text(
+                text = "화면 더블터치 좌/우 동작 설정",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
             )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = settings.doubleTapAction == DoubleTapAction.SEEK &&
+                        settings.doubleTapUnit == SeekUnit.SECONDS,
+                    onClick = {
+                        onUpdate {
+                            it.copy(
+                                doubleTapAction = DoubleTapAction.SEEK,
+                                doubleTapUnit = SeekUnit.SECONDS,
+                            )
+                        }
+                    },
+                    label = { Text("초 단위") },
+                )
+                FilterChip(
+                    selected = settings.doubleTapAction == DoubleTapAction.SEEK &&
+                        settings.doubleTapUnit == SeekUnit.FRAMES,
+                    onClick = {
+                        onUpdate {
+                            it.copy(
+                                doubleTapAction = DoubleTapAction.SEEK,
+                                doubleTapUnit = SeekUnit.FRAMES,
+                            )
+                        }
+                    },
+                    label = { Text("프레임 단위") },
+                )
+                FilterChip(
+                    selected = settings.doubleTapAction == DoubleTapAction.PREV_NEXT_VIDEO,
+                    onClick = {
+                        onUpdate { it.copy(doubleTapAction = DoubleTapAction.PREV_NEXT_VIDEO) }
+                    },
+                    label = { Text("이전/다음 파일") },
+                )
+            }
+            if (settings.doubleTapAction == DoubleTapAction.PREV_NEXT_VIDEO) {
+                Text(
+                    text = "왼쪽 더블터치로 이전 동영상, 오른쪽 더블터치로 다음 동영상으로 이동합니다. (중앙 더블터치는 재생/일시정지)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (settings.doubleTapUnit == SeekUnit.SECONDS) {
+                Text(
+                    text = "더블터치 이동 시간: ${settings.doubleTapSeconds}초",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(3, 5, 10, 15, 20, 30).forEach { sec ->
+                        FilterChip(
+                            selected = settings.doubleTapSeconds == sec,
+                            onClick = { onUpdate { it.copy(doubleTapSeconds = sec) } },
+                            label = { Text("${sec}초") },
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = "더블터치 이동 프레임: ${settings.doubleTapFrames}프레임",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(1, 5, 10, 15, 30, 60).forEach { count ->
+                        FilterChip(
+                            selected = settings.doubleTapFrames == count,
+                            onClick = { onUpdate { it.copy(doubleTapFrames = count) } },
+                            label = { Text("${count}F") },
+                        )
+                    }
+                }
+            }
 
             HorizontalDivider()
 

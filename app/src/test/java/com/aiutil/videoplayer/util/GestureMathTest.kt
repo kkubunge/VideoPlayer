@@ -230,4 +230,14 @@ class GestureMathTest {
             ),
         )
     }
+
+    @Test
+    fun `adjacent video index handles middle bounds and empty playlists`() {
+        assertEquals(1, GestureMath.computeAdjacentVideoIndex(currentIndex = 0, playlistSize = 3, isNext = true))
+        assertEquals(1, GestureMath.computeAdjacentVideoIndex(currentIndex = 2, playlistSize = 3, isNext = false))
+        assertEquals(null, GestureMath.computeAdjacentVideoIndex(currentIndex = 0, playlistSize = 3, isNext = false))
+        assertEquals(null, GestureMath.computeAdjacentVideoIndex(currentIndex = 2, playlistSize = 3, isNext = true))
+        assertEquals(null, GestureMath.computeAdjacentVideoIndex(currentIndex = 0, playlistSize = 1, isNext = true))
+        assertEquals(null, GestureMath.computeAdjacentVideoIndex(currentIndex = 0, playlistSize = 0, isNext = true))
+    }
 }
